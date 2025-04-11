@@ -1,12 +1,16 @@
-obj-m += pim_bridge_module.o
-RUST_LIB := ../PIM-OS/pim-os/kernels/X1/aarch64-unknown-none/release/libpim_os.a
+# Makefile for including another C-Source File into the Module
 
-all:
-	sudo make -C /lib/modules/$(shell uname -r)/build M=$(shell pwd) modules EXTRA_CFLAGS="-I$(PWD)" LDFLAGS_MODULE="$(RUST_LIB)"
+KDIR ?= ../linux # Default if KDIR is not set from outside
+RUST_ENV := sudo RUSTUP_TOOLCHAIN=stable PATH="$(HOME)/.cargo/bin:$$PATH"
+
+default:
+	$(RUST_ENV) $(MAKE) -C $(KDIR) M=$$PWD
+
+modules_install: default
+	$(RUST_ENV) $(MAKE) -C $(KDIR) M=$$PWD modules_install
 
 clean:
-	sudo make -C /lib/modules/$(shell uname -r)/build M=$(shell pwd) clean
-
+	sudo make -C $(KDIR) M=$(shell pwd) clean
 
 install:
 	sudo insmod pim_bridge_module.ko
