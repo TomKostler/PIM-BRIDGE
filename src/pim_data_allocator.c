@@ -1,4 +1,4 @@
-#include "../include/pim_data_memory_region.h"
+#include "../include/pim_memory_region.h"
 
 static size_t pim_data_offset = 0;
 

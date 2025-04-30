@@ -3,7 +3,7 @@
 #include <linux/string.h>
 
 #include "../include/pim_vectors.h"
-#include "../include/pim_data_memory_region.h"
+#include "../include/pim_memory_region.h"
 #include "../include/pim_data_allocator.h"
 
 
@@ -18,6 +18,7 @@ int init_vector(uint16_t *arr, size_t length) {
     for (int i = 0; i < length; i++) {
         iowrite16(arr[i], vector_addr);
         vector_addr += 2;
+        dsb(SY);
     }
 
     
