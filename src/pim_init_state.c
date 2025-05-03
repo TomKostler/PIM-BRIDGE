@@ -67,10 +67,9 @@ int set_bank_mode(pim_bank_mode_t bank_mode) {
 int set_kernel(kernel_builder_t builder) {
 	Microkernel kernel;
 	int success_kernel = builder(&kernel);
-	pr_info("kernel[0]: %d\n", kernel.kernel[0].type);
 
 
-	// PARSEN AM BESTEN AUSLAGERN IN USER-SPACE INTERFACE SPÄTER!!!
+	// TODO: PARSING IN USER_SPACE LIB!!!
 
 	#define BUFFER_SIZE 2048
     char *buffer = kmalloc(BUFFER_SIZE, GFP_KERNEL);
@@ -108,12 +107,7 @@ int set_kernel(kernel_builder_t builder) {
     total_written += written;
 
 
-    pr_info("PARSED Kernel:\n%s\n", buffer);
-
-
-
     write_config_bytes(buffer, strlen(buffer));
-
 
 
 

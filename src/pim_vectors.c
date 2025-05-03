@@ -7,7 +7,7 @@
 #include "../include/pim_data_allocator.h"
 
 
-int init_vector(uint16_t *arr, size_t length) {
+uint32_t __iomem* init_vector(uint16_t *arr, size_t length) {
 
     // Allocate enough physical memory based off MMIO-Mapping for the vector
     uint32_t __iomem *vector_addr = pim_data_region_alloc(length * sizeof(uint16_t), PIM_VECTOR_ALIGNMENT);
@@ -20,10 +20,9 @@ int init_vector(uint16_t *arr, size_t length) {
         vector_addr += 2;
         dsb(SY);
     }
-
     
 
-    // Zum testen und auslesen:
+    // For testing purposes
     pr_info("--------- Vector is ---------:");
     vector_addr -= 2*length;
     for (int i = 0; i < length; i++) {
@@ -33,13 +32,13 @@ int init_vector(uint16_t *arr, size_t length) {
     }
 
     wmb();
-    return 0;
+    return vector_addr;
 }
 
 
 
 
-int init_vector_result(size_t length) {
+uint32_t __iomem* init_vector_result(size_t length) {
     uint16_t arr[length];
     memset(arr, 0, length * sizeof(uint16_t));
 

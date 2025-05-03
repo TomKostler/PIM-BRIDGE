@@ -20,6 +20,5 @@
 extern volatile u32 __iomem *pim_data_virt_addr;
 extern volatile u32 __iomem *pim_config_virt_addr;
 
-extern bool is_pim_memory_cacheless;
 
 #endif
