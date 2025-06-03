@@ -92,7 +92,7 @@ static int parse_file_to_string(char *buffer, size_t size, const File *file) {
                            file->srfa.index);
         break;
     default:
-        pr_err("Unbekannter FileType: %d\n", file->type);
+        pr_err("Unknown FileType: %d\n", file->type);
         return -EINVAL;
     }
 
