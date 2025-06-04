@@ -6,6 +6,23 @@
 #include "../include/pim_memory_region.h"
 #include "../include/pim_vectors.h"
 
+
+
+
+int trigger_write_vector(void __iomem *address) {
+    iowrite16(0, address);
+    dsb(SY);
+    return 0;
+}
+
+int trigger_read_vector(void __iomem *address) {
+    volatile uint8_t val = ioread8(address);
+    (void)val;
+    dsb(SY);
+    return 0;
+}
+
+
 void __iomem *init_vector(uint16_t *arr, size_t length) {
     size_t total_size = length * sizeof(uint16_t);
     uint16_t __iomem *vector_start_addr =

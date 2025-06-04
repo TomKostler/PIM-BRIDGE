@@ -8,7 +8,7 @@
 
 
 #include "../include/pim_memory_region.h"
-#include "../include/vadd.h"
+#include "../include/bins.h"
 
 
 
@@ -38,7 +38,8 @@ static int __init pim_bridge_init(void) {
     }
 
     pr_info("Initialized PIM-Region starting at: %px\n", pim_data_virt_addr);
-    vadd_driver_code();
+    // vadd_driver_code();
+    vmul_driver_code();
 
     return 0;
 }

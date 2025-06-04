@@ -5,7 +5,7 @@
 
 int build_kernel_vadd(Microkernel* kernel_vadd);
 
-int parse_instruction_to_string(char *buffer, size_t size, const Instruction *instr);
+int build_kernel_vmul(Microkernel* kernel_vmul);
 
 
 #endif

@@ -1,23 +1,12 @@
-#include "../include/microkernels/kernel_datastructures.h"
-#include "../include/microkernels/kernels.h"
-#include "../include/pim_configs.h"
-#include "../include/pim_data_allocator.h"
-#include "../include/pim_init_state.h"
-#include "../include/pim_memory_region.h"
-#include "../include/pim_vectors.h"
+#include "../../include/microkernels/kernel_datastructures.h"
+#include "../../include/microkernels/kernels.h"
+#include "../../include/pim_configs.h"
+#include "../../include/pim_data_allocator.h"
+#include "../../include/pim_init_state.h"
+#include "../../include/pim_memory_region.h"
+#include "../../include/pim_vectors.h"
 
-static int trigger_write(void __iomem *address) {
-    iowrite16(0, address);
-    dsb(SY);
-    return 0;
-}
 
-static int trigger_read(void __iomem *address) {
-    volatile uint8_t val = ioread8(address);
-    (void)val;
-    dsb(SY);
-    return 0;
-}
 
 static int vadd_execute(uint16_t __iomem *vector_a_address,
                         uint16_t __iomem *vector_b_address,
@@ -33,22 +22,21 @@ static int vadd_execute(uint16_t __iomem *vector_a_address,
 
         const int chunk_size_elements = NUM_BANKS * ELEMENTS_PER_BANK;
 
-        pr_err("Befor trigger reads\n");
 
         // Triggers MOV in PIM-VM
-        trigger_read(vector_a_address + chunk_size_elements * i);
+        trigger_read_vector(vector_a_address + chunk_size_elements * i);
         pr_err("vector_a_address: %px\n", vector_a_address);
 
         // Triggers ADD in PIM-VM
-        trigger_read(vector_b_address + chunk_size_elements * i);
+        trigger_read_vector(vector_b_address + chunk_size_elements * i);
         pr_info("vector_b_address: %px\n", vector_b_address);
 
         // Trigers FILL in PIM-VM
-        trigger_write(vector_result_address + chunk_size_elements * i);
+        trigger_write_vector(vector_result_address + chunk_size_elements * i);
         pr_info("vector_result_address: %px\n", vector_result_address);
 
         // Dummy-Region Read => Triggers EXIT in PIM-VM
-        trigger_read(dummy_region_address);
+        trigger_read_vector(dummy_region_address);
     }
 
     return 0;

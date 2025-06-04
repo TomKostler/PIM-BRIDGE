@@ -1,6 +1,11 @@
 #ifndef PIM_VECTORS_H
 #define PIM_VECTORS_H
 
+
+int trigger_read_vector(void __iomem *address);
+
+int trigger_write_vector(void __iomem *address);
+
 /*
     Initializes the vectors needed for vadd in the PIM_DATA_REGION
 */
