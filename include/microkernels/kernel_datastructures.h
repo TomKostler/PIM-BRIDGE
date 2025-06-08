@@ -113,6 +113,7 @@ typedef struct {
 
 typedef struct {
     Instruction kernel[32];
+    int blocks;
 } Microkernel;
 
 

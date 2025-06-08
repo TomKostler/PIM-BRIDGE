@@ -118,7 +118,5 @@ cleanup_error:
         pr_err("Error at parsing (Code: %d)\n", result);
     }
     kfree(buffer);
-    return result;
-
-    return 0;
+    return kernel.blocks;
 }
