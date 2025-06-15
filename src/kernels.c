@@ -328,8 +328,6 @@ int build_kernel_vmul_X2(Microkernel *kernel_vmul) {
 
 
 
-
-
 int build_kernel_gemv(Microkernel* kernel_gemv) {
     Instruction instr0;
     instr0.type = MOV;
@@ -373,53 +371,6 @@ int build_kernel_gemv(Microkernel* kernel_gemv) {
     instr6.mov.dst.type = GRF_A;
     instr6.mov.dst.grfa.index = 6;
 
-    // Instruction instr7;
-    // instr7.type = MOV;
-    // instr7.mov.src.type = BANK;
-    // instr7.mov.dst.type = GRF_A;
-    // instr7.mov.dst.grfa.index = 7;
-
-
-    // Instruction instr8;
-    // instr8.type = MAC;
-    // instr8.mac.src0.type = BANK;
-    // instr8.mac.src1.type = GRF_A;
-    // instr8.mac.src1.grfa.index = 0;
-    // instr8.mac.src2.type = GRF_B;
-    // instr8.mac.src2.grfb.index = 0;
-    // instr8.mac.dst.type = GRF_B;
-    // instr8.mac.dst.grfb.index = 0;
-    // instr8.mac.aam = true;
-
-
-    // Instruction instr9;
-    // instr9.type = JUMP;
-    // instr9.jump.offset = -1;
-    // instr9.jump.count = 7;
-
-
-    // Instruction instr10;
-    // instr10.type = FILL;
-    // instr10.fill.src.type = GRF_B;
-    // instr10.fill.src.grfb.index = 0;
-    // instr10.fill.dst.type = BANK;
-
-
-    // Instruction instr11;
-    // instr11.type = EXIT;
-
-
-
-
-
-
-
-// ------------------------------
-
-
-
-
-
     Instruction instr7;
     instr7.type = MOV;
     instr7.mov.src.type = BANK;
@@ -442,32 +393,65 @@ int build_kernel_gemv(Microkernel* kernel_gemv) {
     Instruction instr9;
     instr9.type = JUMP;
     instr9.jump.offset = -1;
-    instr9.jump.count = 7;
+    instr9.jump.count = 63;
 
 
     Instruction instr10;
     instr10.type = FILL;
     instr10.fill.src.type = GRF_B;
-    instr10.fill.src.grfb.index = 6;
+    instr10.fill.src.grfb.index = 0;
     instr10.fill.dst.type = BANK;
 
-
     Instruction instr11;
-    instr11.type = EXIT;
-
-
-
-
-
-
-// ------------------------------
-
-
-
-
+    instr11.type = FILL;
+    instr11.fill.src.type = GRF_B;
+    instr11.fill.src.grfb.index = 1;
+    instr11.fill.dst.type = BANK;
 
     Instruction instr12;
-    instr12.type = NOP;
+    instr12.type = FILL;
+    instr12.fill.src.type = GRF_B;
+    instr12.fill.src.grfb.index = 2;
+    instr12.fill.dst.type = BANK;
+
+    Instruction instr13;
+    instr13.type = FILL;
+    instr13.fill.src.type = GRF_B;
+    instr13.fill.src.grfb.index = 3;
+    instr13.fill.dst.type = BANK;
+
+    Instruction instr14;
+    instr14.type = FILL;
+    instr14.fill.src.type = GRF_B;
+    instr14.fill.src.grfb.index = 4;
+    instr14.fill.dst.type = BANK;
+    
+    Instruction instr15;
+    instr15.type = FILL;
+    instr15.fill.src.type = GRF_B;
+    instr15.fill.src.grfb.index = 5;
+    instr15.fill.dst.type = BANK;
+
+    Instruction instr16;
+    instr16.type = FILL;
+    instr16.fill.src.type = GRF_B;
+    instr16.fill.src.grfb.index = 6;
+    instr16.fill.dst.type = BANK;
+
+    Instruction instr17;
+    instr17.type = FILL;
+    instr17.fill.src.type = GRF_B;
+    instr17.fill.src.grfb.index = 7;
+    instr17.fill.dst.type = BANK;
+
+
+    Instruction instr18;
+    instr18.type = EXIT;
+
+
+    Instruction instr19;
+    instr19.type = NOP;
+
 
 
     kernel_gemv->kernel[0] = instr0;
@@ -483,25 +467,25 @@ int build_kernel_gemv(Microkernel* kernel_gemv) {
     kernel_gemv->kernel[10] = instr10;
     kernel_gemv->kernel[11] = instr11;
     kernel_gemv->kernel[12] = instr12;
-    kernel_gemv->kernel[13] = instr12;
-    kernel_gemv->kernel[14] = instr12;
-    kernel_gemv->kernel[15] = instr12;
-    kernel_gemv->kernel[16] = instr12;
-    kernel_gemv->kernel[17] = instr12;
-    kernel_gemv->kernel[18] = instr12;
-    kernel_gemv->kernel[19] = instr12;
-    kernel_gemv->kernel[20] = instr12;
-    kernel_gemv->kernel[21] = instr12;
-    kernel_gemv->kernel[22] = instr12;
-    kernel_gemv->kernel[23] = instr12;
-    kernel_gemv->kernel[24] = instr12;
-    kernel_gemv->kernel[25] = instr12;
-    kernel_gemv->kernel[26] = instr12;
-    kernel_gemv->kernel[27] = instr12;
-    kernel_gemv->kernel[28] = instr12;
-    kernel_gemv->kernel[29] = instr12;
-    kernel_gemv->kernel[30] = instr12;
-    kernel_gemv->kernel[31] = instr12;
+    kernel_gemv->kernel[13] = instr13;
+    kernel_gemv->kernel[14] = instr14;
+    kernel_gemv->kernel[15] = instr15;
+    kernel_gemv->kernel[16] = instr16;
+    kernel_gemv->kernel[17] = instr17;
+    kernel_gemv->kernel[18] = instr18;
+    kernel_gemv->kernel[19] = instr19;
+    kernel_gemv->kernel[20] = instr19;
+    kernel_gemv->kernel[21] = instr19;
+    kernel_gemv->kernel[22] = instr19;
+    kernel_gemv->kernel[23] = instr19;
+    kernel_gemv->kernel[24] = instr19;
+    kernel_gemv->kernel[25] = instr19;
+    kernel_gemv->kernel[26] = instr19;
+    kernel_gemv->kernel[27] = instr19;
+    kernel_gemv->kernel[28] = instr19;
+    kernel_gemv->kernel[29] = instr19;
+    kernel_gemv->kernel[30] = instr19;
+    kernel_gemv->kernel[31] = instr19;
 
     return 0;
 }

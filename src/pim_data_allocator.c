@@ -1,25 +1,30 @@
 #include "../include/pim_data_allocator.h"
 #include "../include/pim_memory_region.h"
+#include <linux/log2.h>
 
-static size_t pim_data_offset = 0;
+static size_t current_start_free_mem_offset = 0;
 
-void __iomem *pim_data_region_alloc(size_t size, uint32_t alignment) {
-    size_t aligned_offset;
-    void __iomem *addr;
+void __iomem *pim_data_region_alloc(size_t size, size_t alignment) {
+    phys_addr_t phys_base_addr =
+        PIM_DATA_MEMORY_REGION_BASE + current_start_free_mem_offset;
 
-    // Align current offset
-    aligned_offset = (pim_data_offset + (alignment - 1)) & ~(alignment - 1);
+    phys_addr_t aligned_phys_addr = (phys_base_addr + alignment - 1) & ~(alignment - 1);
 
-    if (aligned_offset + size > PIM_DATA_MEMORY_REGION_SIZE) {
+    unsigned long offset = aligned_phys_addr - phys_base_addr;
+
+    if (offset + size > PIM_DATA_MEMORY_REGION_SIZE) {
         pr_err("PIM allocator out of memory\n");
         return NULL;
     }
 
-    addr = pim_data_virt_addr + aligned_offset;
-    pim_data_offset = aligned_offset + size;
-
+    void __iomem *addr =
+        (void __iomem *)((u8 __iomem *)pim_data_virt_addr +
+                         current_start_free_mem_offset + offset);
+    current_start_free_mem_offset += offset + size;
     return addr;
 }
+
+
 
 void __iomem *init_dummy_memory_region(void) {
     uint32_t __iomem *dummy_addr =

@@ -29,13 +29,6 @@ static int vadd_execute(uint16_t __iomem *vector_a_address,
 
 
         // Triggers MOV in PIM-VM
-
-        // - hier noch um jedes trigger_read eine for schleife die die Blocks durchläuft => Wenn der Kernel mehr als ein Read hat {
-        //     => Das dann auch ausprobierenm, ob es immer noch klappt, auch mit größeren vadd Kernels!!
-        //     => Wenns klaappt das gleiche für gemv machen!
-
-        // - Vergleichen von vadd mit dem neu gebauten old_gem5 von Derek, obs identisch ist!!!
-        // vadd müsste stimmem noch ein zwei mehr experimente machen
         for (int j = 0; j < kernel_blocks; j++) {
             trigger_read_vector(vector_a_address + chunk_size_elements * i);
             pr_err("vector_a read triggered, address: %px\n", vector_a_address);
@@ -73,7 +66,7 @@ void vadd_driver_code(void) {
     const int ROWS = 512;
 
     // Set Microkernel to vadd
-    int kernel_blocks = set_kernel(build_kernel_vadd_X2);
+    int kernel_blocks = set_kernel(build_kernel_vadd_X1);
     pr_err("kernel_blocks: %d\n", kernel_blocks);
 
     // Use FP16 numbers to add as uint_16 bit representation, since kernel isn't

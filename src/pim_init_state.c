@@ -2,8 +2,8 @@
 #include <linux/module.h>
 #include <linux/slab.h>
 
-#include "../include/microkernels/kernels.h"
 #include "../include/microkernels/kernel_to_string.h"
+#include "../include/microkernels/kernels.h"
 #include "../include/pim_init_state.h"
 #include "../include/pim_memory_region.h"
 
