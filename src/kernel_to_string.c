@@ -3,7 +3,6 @@
 
 #include "../include/microkernels/kernel_to_string.h"
 
-
 static int parse_file_to_string(char *buffer, size_t size, const File *file) {
     int written = 0;
     switch (file->type) {

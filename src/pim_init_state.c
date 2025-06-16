@@ -1,5 +1,3 @@
-#include <linux/kernel.h>
-#include <linux/module.h>
 #include <linux/slab.h>
 
 #include "../include/microkernels/kernel_to_string.h"
@@ -51,8 +49,6 @@ int set_bank_mode(pim_bank_mode_t bank_mode) {
 int set_kernel(kernel_builder_t builder) {
     Microkernel kernel;
     int success_kernel_builder = builder(&kernel);
-
-    // TODO: PARSING IN USER_SPACE LIB!!!
 
 #define BUFFER_SIZE 2048
     char *buffer = kmalloc(BUFFER_SIZE, GFP_KERNEL);

@@ -5,48 +5,48 @@
 #include "../../include/pim_init_state.h"
 #include "../../include/pim_memory_region.h"
 #include "../../include/pim_vectors.h"
-
+#include "../../include/read_write_triggers.h"
 
 // For Testing => Contains f16-Floats in UINT16-Format
 #include "../../testing_helper/f16_lut.h"
-
 
 static int vmul_execute(uint16_t __iomem *vector_a_address,
                         uint16_t __iomem *vector_b_address,
                         uint16_t __iomem *vector_result_address,
                         uint16_t __iomem *dummy_region_address,
-                        int vector_length,
-                        int kernel_blocks) {
+                        int vector_length, int kernel_blocks) {
 
     int num_chunks = (vector_length + (NUM_BANKS * ELEMENTS_PER_BANK - 1)) /
                      (NUM_BANKS * ELEMENTS_PER_BANK);
-    pr_err("num_chunks reads: %d, kernel_blocks: \n", num_chunks, kernel_blocks);
+    pr_err("num_chunks reads: %d, kernel_blocks: %d\n", num_chunks,
+           kernel_blocks);
 
     for (int i = 0; i < num_chunks; i++) {
 
         const int chunk_size_elements = NUM_BANKS * ELEMENTS_PER_BANK;
 
-
         // Triggers MOV in PIM-VM
         for (int j = 0; j < kernel_blocks; j++) {
-            trigger_read_vector(vector_a_address + chunk_size_elements * i);
+            trigger_read(vector_a_address + chunk_size_elements * i);
             pr_err("vector_a read triggered, address: %px\n", vector_a_address);
         }
-        
+
         // Triggers ADD in PIM-VM
         for (int j = 0; j < kernel_blocks; j++) {
-            trigger_read_vector(vector_b_address + chunk_size_elements * i);
-            pr_info("vector_b read triggered, address: %px\n", vector_b_address);
+            trigger_read(vector_b_address + chunk_size_elements * i);
+            pr_info("vector_b read triggered, address: %px\n",
+                    vector_b_address);
         }
 
         // Trigers FILL in PIM-VM
         for (int j = 0; j < kernel_blocks; j++) {
-            trigger_write_vector(vector_result_address + chunk_size_elements * i);
-            pr_info("vector_result write triggered, address: %px\n", vector_result_address);
+            trigger_write(vector_result_address + chunk_size_elements * i);
+            pr_info("vector_result write triggered, address: %px\n",
+                    vector_result_address);
         }
 
         // Dummy-Region Read => Triggers EXIT in PIM-VM
-        trigger_read_vector(dummy_region_address);
+        trigger_read(dummy_region_address);
     }
 
     return 0;
@@ -54,12 +54,17 @@ static int vmul_execute(uint16_t __iomem *vector_a_address,
 
 void vmul_driver_code(void) {
 
-    // Set Microkernel to vadd
-    int kernel_blocks = set_kernel(build_kernel_vmul_X2);
+    int kernel_blocks;
+    const int ROWS = 256;
+    uint16_t vector_arr_a[256];
+    uint16_t __iomem *vector_a_address;
+    uint16_t vector_arr_b[256];
+    uint16_t __iomem *vector_b_address;
+    uint16_t __iomem *vector_result_address;
+    uint16_t __iomem *dummy_region_address;
+
+    kernel_blocks = set_kernel(build_kernel_vmul_X1);
     pr_info("Building kernel success: %d\n", kernel_blocks);
-
-
-    const int ROWS = 512;
 
     // Use FP16 numbers to add as uint_16 bit representation, since kernel isn't
     // allowing floats!
@@ -78,8 +83,6 @@ void vmul_driver_code(void) {
     //     0x0000, // 0.0
     // };
     // uint16_t __iomem *vector_b_address = init_vector(vector_arr_b, 3);
-
-
 
     // Pattern Sample
     // uint16_t pattern_a[] = {
@@ -104,24 +107,19 @@ void vmul_driver_code(void) {
     // }
     // uint16_t __iomem *vector_b_address = init_vector(vector_arr_b, 3);
 
-
-
     // Example for testing for different row-sizes and kernel_block sizes
-    uint16_t vector_arr_a[ROWS];
     memset16(vector_arr_a, 0x4000, ROWS);
-    uint16_t __iomem *vector_a_address = init_vector(vector_arr_a, ROWS);
+    vector_a_address = init_vector(vector_arr_a, ROWS);
 
-    uint16_t vector_arr_b[ROWS];
     memset16(vector_arr_b, 0x4200, ROWS);
-    uint16_t __iomem *vector_b_address = init_vector(vector_arr_b, ROWS);
-
+    vector_b_address = init_vector(vector_arr_b, ROWS);
 
     // Init result vector
-    uint16_t __iomem *vector_result_address = init_vector_result(ROWS);
+    vector_result_address = init_vector_result(ROWS);
 
     // Init dummy memory region for syncing operations that don't need data from
     // memory
-    uint16_t __iomem *dummy_region_address = init_dummy_memory_region();
+    dummy_region_address = init_dummy_memory_region();
 
     // Guarantee that vectors and PIM_DATA_REGION is correctly initialized
     dsb(SY);

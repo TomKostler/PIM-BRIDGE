@@ -1,6 +1,5 @@
 #include "../include/pim_data_allocator.h"
 #include "../include/pim_memory_region.h"
-#include <linux/log2.h>
 
 static size_t current_start_free_mem_offset = 0;
 
@@ -8,7 +7,8 @@ void __iomem *pim_data_region_alloc(size_t size, size_t alignment) {
     phys_addr_t phys_base_addr =
         PIM_DATA_MEMORY_REGION_BASE + current_start_free_mem_offset;
 
-    phys_addr_t aligned_phys_addr = (phys_base_addr + alignment - 1) & ~(alignment - 1);
+    phys_addr_t aligned_phys_addr =
+        (phys_base_addr + alignment - 1) & ~(alignment - 1);
 
     unsigned long offset = aligned_phys_addr - phys_base_addr;
 
@@ -23,8 +23,6 @@ void __iomem *pim_data_region_alloc(size_t size, size_t alignment) {
     current_start_free_mem_offset += offset + size;
     return addr;
 }
-
-
 
 void __iomem *init_dummy_memory_region(void) {
     uint32_t __iomem *dummy_addr =

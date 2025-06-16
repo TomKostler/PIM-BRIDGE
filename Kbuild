@@ -12,6 +12,7 @@ pim_bridge_module-objs := \
     src/kernels.o \
     src/kernel_to_string.o \
     src/pim_matrices.o \
+    src/read_write_triggers.o \
     src/bin/vadd.o \
     src/bin/vmul.o \
     src/bin/gemv.o

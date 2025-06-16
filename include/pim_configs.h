@@ -1,7 +1,7 @@
 #ifndef PIM_CONFIG_H
 #define PIM_CONFIG_H
 
-// Size of a 16-element vector that a PIM unit can process
+// Size of a vector that a PIM unit can process
 #define ELEMENTS_PER_BANK 16
 
 #define NUM_BANKS 16

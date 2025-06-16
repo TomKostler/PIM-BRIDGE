@@ -7,12 +7,16 @@
 int build_kernel_vadd_X1(Microkernel *kernel_vadd) {
 
     Instruction instr0;
+    Instruction instr1;
+    Instruction instr2;
+    Instruction instr3;
+    Instruction instr4;
+
     instr0.type = MOV;
     instr0.mov.src.type = BANK;
     instr0.mov.dst.type = GRF_A;
     instr0.mov.dst.grfa.index = 0;
 
-    Instruction instr1;
     instr1.type = ADD;
     instr1.add.src0.type = BANK;
     instr1.add.src1.type = GRF_A;
@@ -21,16 +25,13 @@ int build_kernel_vadd_X1(Microkernel *kernel_vadd) {
     instr1.add.dst.grfb.index = 0;
     instr1.add.aam = false;
 
-    Instruction instr2;
     instr2.type = FILL;
     instr2.fill.src.type = GRF_B;
     instr2.fill.src.grfb.index = 0;
     instr2.fill.dst.type = BANK;
 
-    Instruction instr3;
     instr3.type = EXIT;
 
-    Instruction instr4;
     instr4.type = NOP;
 
     kernel_vadd->kernel[0] = instr0;
@@ -66,28 +67,31 @@ int build_kernel_vadd_X1(Microkernel *kernel_vadd) {
     kernel_vadd->kernel[30] = instr4;
     kernel_vadd->kernel[31] = instr4;
 
-
     kernel_vadd->blocks = 1;
     return 0;
 }
 
-
 int build_kernel_vadd_X2(Microkernel *kernel_vadd) {
 
     Instruction instr0;
+    Instruction instr1;
+    Instruction instr2;
+    Instruction instr3;
+    Instruction instr4;
+    Instruction instr5;
+    Instruction instr6;
+    Instruction instr7;
+
     instr0.type = MOV;
     instr0.mov.src.type = BANK;
     instr0.mov.dst.type = GRF_A;
     instr0.mov.dst.grfa.index = 0;
 
-    Instruction instr1;
     instr1.type = MOV;
     instr1.mov.src.type = BANK;
     instr1.mov.dst.type = GRF_A;
     instr1.mov.dst.grfa.index = 1;
 
-
-    Instruction instr2;
     instr2.type = ADD;
     instr2.add.src0.type = BANK;
     instr2.add.src1.type = GRF_A;
@@ -96,7 +100,6 @@ int build_kernel_vadd_X2(Microkernel *kernel_vadd) {
     instr2.add.dst.grfb.index = 0;
     instr2.add.aam = false;
 
-    Instruction instr3;
     instr3.type = ADD;
     instr3.add.src0.type = BANK;
     instr3.add.src1.type = GRF_A;
@@ -105,24 +108,18 @@ int build_kernel_vadd_X2(Microkernel *kernel_vadd) {
     instr3.add.dst.grfb.index = 1;
     instr3.add.aam = false;
 
-
-    Instruction instr4;
     instr4.type = FILL;
     instr4.fill.src.type = GRF_B;
     instr4.fill.src.grfb.index = 0;
     instr4.fill.dst.type = BANK;
 
-    Instruction instr5;
     instr5.type = FILL;
     instr5.fill.src.type = GRF_B;
     instr5.fill.src.grfb.index = 1;
     instr5.fill.dst.type = BANK;
 
-
-    Instruction instr6;
     instr6.type = EXIT;
 
-    Instruction instr7;
     instr7.type = NOP;
 
     kernel_vadd->kernel[0] = instr0;
@@ -162,19 +159,18 @@ int build_kernel_vadd_X2(Microkernel *kernel_vadd) {
     return 0;
 }
 
-
-
-
-
-
-int build_kernel_vmul_X1(Microkernel* kernel_vmul) {
+int build_kernel_vmul_X1(Microkernel *kernel_vmul) {
     Instruction instr0;
+    Instruction instr1;
+    Instruction instr2;
+    Instruction instr3;
+    Instruction instr4;
+
     instr0.type = MOV;
     instr0.mov.src.type = BANK;
     instr0.mov.dst.type = GRF_A;
     instr0.mov.dst.grfa.index = 0;
 
-    Instruction instr1;
     instr1.type = MUL;
     instr1.add.src0.type = BANK;
     instr1.add.src1.type = GRF_A;
@@ -183,16 +179,13 @@ int build_kernel_vmul_X1(Microkernel* kernel_vmul) {
     instr1.add.dst.grfb.index = 0;
     instr1.add.aam = false;
 
-    Instruction instr2;
     instr2.type = FILL;
     instr2.fill.src.type = GRF_B;
     instr2.fill.src.grfb.index = 0;
     instr2.fill.dst.type = BANK;
 
-    Instruction instr3;
     instr3.type = EXIT;
 
-    Instruction instr4;
     instr4.type = NOP;
 
     kernel_vmul->kernel[0] = instr0;
@@ -233,23 +226,27 @@ int build_kernel_vmul_X1(Microkernel* kernel_vmul) {
     return 0;
 }
 
-
 int build_kernel_vmul_X2(Microkernel *kernel_vmul) {
 
     Instruction instr0;
+    Instruction instr1;
+    Instruction instr2;
+    Instruction instr3;
+    Instruction instr4;
+    Instruction instr5;
+    Instruction instr6;
+    Instruction instr7;
+
     instr0.type = MOV;
     instr0.mov.src.type = BANK;
     instr0.mov.dst.type = GRF_A;
     instr0.mov.dst.grfa.index = 0;
 
-    Instruction instr1;
     instr1.type = MOV;
     instr1.mov.src.type = BANK;
     instr1.mov.dst.type = GRF_A;
     instr1.mov.dst.grfa.index = 1;
 
-
-    Instruction instr2;
     instr2.type = MUL;
     instr2.add.src0.type = BANK;
     instr2.add.src1.type = GRF_A;
@@ -258,7 +255,6 @@ int build_kernel_vmul_X2(Microkernel *kernel_vmul) {
     instr2.add.dst.grfb.index = 0;
     instr2.add.aam = false;
 
-    Instruction instr3;
     instr3.type = MUL;
     instr3.add.src0.type = BANK;
     instr3.add.src1.type = GRF_A;
@@ -267,24 +263,18 @@ int build_kernel_vmul_X2(Microkernel *kernel_vmul) {
     instr3.add.dst.grfb.index = 1;
     instr3.add.aam = false;
 
-
-    Instruction instr4;
     instr4.type = FILL;
     instr4.fill.src.type = GRF_B;
     instr4.fill.src.grfb.index = 0;
     instr4.fill.dst.type = BANK;
 
-    Instruction instr5;
     instr5.type = FILL;
     instr5.fill.src.type = GRF_B;
     instr5.fill.src.grfb.index = 1;
     instr5.fill.dst.type = BANK;
 
-
-    Instruction instr6;
     instr6.type = EXIT;
 
-    Instruction instr7;
     instr7.type = NOP;
 
     kernel_vmul->kernel[0] = instr0;
@@ -324,61 +314,68 @@ int build_kernel_vmul_X2(Microkernel *kernel_vmul) {
     return 0;
 }
 
-
-
-
-
-int build_kernel_gemv(Microkernel* kernel_gemv) {
+int build_kernel_gemv(Microkernel *kernel_gemv) {
     Instruction instr0;
+    Instruction instr1;
+    Instruction instr2;
+    Instruction instr3;
+    Instruction instr4;
+    Instruction instr5;
+    Instruction instr6;
+    Instruction instr7;
+    Instruction instr8;
+    Instruction instr9;
+    Instruction instr10;
+    Instruction instr11;
+    Instruction instr12;
+    Instruction instr13;
+    Instruction instr14;
+    Instruction instr15;
+    Instruction instr16;
+    Instruction instr17;
+    Instruction instr18;
+    Instruction instr19;
+
     instr0.type = MOV;
     instr0.mov.src.type = BANK;
     instr0.mov.dst.type = GRF_A;
     instr0.mov.dst.grfa.index = 0;
 
-    Instruction instr1;
     instr1.type = MOV;
     instr1.mov.src.type = BANK;
     instr1.mov.dst.type = GRF_A;
     instr1.mov.dst.grfa.index = 1;
 
-    Instruction instr2;
     instr2.type = MOV;
     instr2.mov.src.type = BANK;
     instr2.mov.dst.type = GRF_A;
     instr2.mov.dst.grfa.index = 2;
 
-    Instruction instr3;
     instr3.type = MOV;
     instr3.mov.src.type = BANK;
     instr3.mov.dst.type = GRF_A;
     instr3.mov.dst.grfa.index = 3;
 
-    Instruction instr4;
     instr4.type = MOV;
     instr4.mov.src.type = BANK;
     instr4.mov.dst.type = GRF_A;
     instr4.mov.dst.grfa.index = 4;
 
-    Instruction instr5;
     instr5.type = MOV;
     instr5.mov.src.type = BANK;
     instr5.mov.dst.type = GRF_A;
     instr5.mov.dst.grfa.index = 5;
 
-    Instruction instr6;
     instr6.type = MOV;
     instr6.mov.src.type = BANK;
     instr6.mov.dst.type = GRF_A;
     instr6.mov.dst.grfa.index = 6;
 
-    Instruction instr7;
     instr7.type = MOV;
     instr7.mov.src.type = BANK;
     instr7.mov.dst.type = GRF_A;
     instr7.mov.dst.grfa.index = 7;
 
-
-    Instruction instr8;
     instr8.type = MAC;
     instr8.mac.src0.type = BANK;
     instr8.mac.src1.type = GRF_A;
@@ -389,70 +386,53 @@ int build_kernel_gemv(Microkernel* kernel_gemv) {
     instr8.mac.dst.grfb.index = 0;
     instr8.mac.aam = true;
 
-
-    Instruction instr9;
     instr9.type = JUMP;
     instr9.jump.offset = -1;
     instr9.jump.count = 63;
 
-
-    Instruction instr10;
     instr10.type = FILL;
     instr10.fill.src.type = GRF_B;
     instr10.fill.src.grfb.index = 0;
     instr10.fill.dst.type = BANK;
 
-    Instruction instr11;
     instr11.type = FILL;
     instr11.fill.src.type = GRF_B;
     instr11.fill.src.grfb.index = 1;
     instr11.fill.dst.type = BANK;
 
-    Instruction instr12;
     instr12.type = FILL;
     instr12.fill.src.type = GRF_B;
     instr12.fill.src.grfb.index = 2;
     instr12.fill.dst.type = BANK;
 
-    Instruction instr13;
     instr13.type = FILL;
     instr13.fill.src.type = GRF_B;
     instr13.fill.src.grfb.index = 3;
     instr13.fill.dst.type = BANK;
 
-    Instruction instr14;
     instr14.type = FILL;
     instr14.fill.src.type = GRF_B;
     instr14.fill.src.grfb.index = 4;
     instr14.fill.dst.type = BANK;
-    
-    Instruction instr15;
+
     instr15.type = FILL;
     instr15.fill.src.type = GRF_B;
     instr15.fill.src.grfb.index = 5;
     instr15.fill.dst.type = BANK;
 
-    Instruction instr16;
     instr16.type = FILL;
     instr16.fill.src.type = GRF_B;
     instr16.fill.src.grfb.index = 6;
     instr16.fill.dst.type = BANK;
 
-    Instruction instr17;
     instr17.type = FILL;
     instr17.fill.src.type = GRF_B;
     instr17.fill.src.grfb.index = 7;
     instr17.fill.dst.type = BANK;
 
-
-    Instruction instr18;
     instr18.type = EXIT;
 
-
-    Instruction instr19;
     instr19.type = NOP;
-
-
 
     kernel_gemv->kernel[0] = instr0;
     kernel_gemv->kernel[1] = instr1;
