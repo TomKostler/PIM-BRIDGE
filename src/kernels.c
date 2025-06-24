@@ -20,7 +20,7 @@ int build_kernel_vadd_X1(Microkernel *kernel_vadd) {
     instr1.type = ADD;
     instr1.add.src0.type = BANK;
     instr1.add.src1.type = GRF_A;
-    instr1.add.dst.grfa.index = 0;
+    instr1.add.src1.grfa.index = 0;
     instr1.add.dst.type = GRF_B;
     instr1.add.dst.grfb.index = 0;
     instr1.add.aam = false;
@@ -29,6 +29,7 @@ int build_kernel_vadd_X1(Microkernel *kernel_vadd) {
     instr2.fill.src.type = GRF_B;
     instr2.fill.src.grfb.index = 0;
     instr2.fill.dst.type = BANK;
+
 
     instr3.type = EXIT;
 
@@ -172,12 +173,12 @@ int build_kernel_vmul_X1(Microkernel *kernel_vmul) {
     instr0.mov.dst.grfa.index = 0;
 
     instr1.type = MUL;
-    instr1.add.src0.type = BANK;
-    instr1.add.src1.type = GRF_A;
-    instr1.add.dst.grfa.index = 0;
-    instr1.add.dst.type = GRF_B;
-    instr1.add.dst.grfb.index = 0;
-    instr1.add.aam = false;
+    instr1.mul.src0.type = BANK;
+    instr1.mul.src1.type = GRF_A;
+    instr1.mul.src1.grfa.index = 0;
+    instr1.mul.dst.type = GRF_B;
+    instr1.mul.dst.grfb.index = 0;
+    instr1.mul.aam = false;
 
     instr2.type = FILL;
     instr2.fill.src.type = GRF_B;
@@ -247,21 +248,23 @@ int build_kernel_vmul_X2(Microkernel *kernel_vmul) {
     instr1.mov.dst.type = GRF_A;
     instr1.mov.dst.grfa.index = 1;
 
+
     instr2.type = MUL;
-    instr2.add.src0.type = BANK;
-    instr2.add.src1.type = GRF_A;
-    instr2.add.dst.grfa.index = 0;
-    instr2.add.dst.type = GRF_B;
-    instr2.add.dst.grfb.index = 0;
-    instr2.add.aam = false;
+    instr2.mul.src0.type = BANK;
+    instr2.mul.src1.type = GRF_A;
+    instr2.mul.src1.grfa.index = 0;
+    instr2.mul.dst.type = GRF_B;
+    instr2.mul.dst.grfb.index = 0;
+    instr2.mul.aam = false;
+
 
     instr3.type = MUL;
-    instr3.add.src0.type = BANK;
-    instr3.add.src1.type = GRF_A;
-    instr3.add.dst.grfa.index = 1;
-    instr3.add.dst.type = GRF_B;
-    instr3.add.dst.grfb.index = 1;
-    instr3.add.aam = false;
+    instr3.mul.src0.type = BANK;
+    instr3.mul.src1.type = GRF_A;
+    instr3.mul.dst.grfa.index = 1;
+    instr3.mul.dst.type = GRF_B;
+    instr3.mul.dst.grfb.index = 1;
+    instr3.mul.aam = false;
 
     instr4.type = FILL;
     instr4.fill.src.type = GRF_B;

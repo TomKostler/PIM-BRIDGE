@@ -5,4 +5,12 @@ void vadd_driver_code(void);
 void vmul_driver_code(void);
 void gemv_driver_code(void);
 
+void vadd_from_userspace(__u64 result_addr, uint16_t *vector_arr_a,
+                         uint16_t *vector_arr_b, int len);
+void vmul_from_userspace(__u64 result_addr, uint16_t *vector_arr_a,
+                         uint16_t *vector_arr_b, int len);
+void gemv_from_userspace(__u64 result_addr, uint16_t *kernel_input_vector,
+                         uint16_t *kernel_matrix, uint32_t len_input_vector,
+                         uint32_t matrix_dim1, uint32_t matrix_dim2);
+
 #endif

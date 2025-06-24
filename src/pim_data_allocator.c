@@ -1,7 +1,7 @@
 #include "../include/pim_data_allocator.h"
 #include "../include/pim_memory_region.h"
 
-static size_t current_start_free_mem_offset = 0;
+size_t current_start_free_mem_offset = 0;
 
 void __iomem *pim_data_region_alloc(size_t size, size_t alignment) {
     phys_addr_t phys_base_addr =
