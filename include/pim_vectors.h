@@ -3,6 +3,8 @@
 
 #include <linux/types.h>
 
+extern int ROWS;
+
 /**
  * Initializes the vectors needed in the PIM_DATA_REGION by copying a simple
  * vector into it element by element.

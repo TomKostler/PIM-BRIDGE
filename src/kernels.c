@@ -30,7 +30,6 @@ int build_kernel_vadd_X1(Microkernel *kernel_vadd) {
     instr2.fill.src.grfb.index = 0;
     instr2.fill.dst.type = BANK;
 
-
     instr3.type = EXIT;
 
     instr4.type = NOP;
@@ -248,7 +247,6 @@ int build_kernel_vmul_X2(Microkernel *kernel_vmul) {
     instr1.mov.dst.type = GRF_A;
     instr1.mov.dst.grfa.index = 1;
 
-
     instr2.type = MUL;
     instr2.mul.src0.type = BANK;
     instr2.mul.src1.type = GRF_A;
@@ -256,7 +254,6 @@ int build_kernel_vmul_X2(Microkernel *kernel_vmul) {
     instr2.mul.dst.type = GRF_B;
     instr2.mul.dst.grfb.index = 0;
     instr2.mul.aam = false;
-
 
     instr3.type = MUL;
     instr3.mul.src0.type = BANK;

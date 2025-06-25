@@ -122,6 +122,7 @@ static int get_gemv_inputs(unsigned long arg, uint16_t **vector_out,
     kernel_matrix = kmalloc(descriptor.matrix_dim1 * descriptor.matrix_dim2 *
                                 sizeof(uint16_t),
                             GFP_KERNEL);
+
     if (!kernel_vector || !kernel_matrix) {
         kfree(kernel_vector);
         kfree(kernel_matrix);
@@ -167,12 +168,12 @@ static long pim_device_ioctl(struct file *file, unsigned int cmd,
     uint32_t matrix_dim1;
     uint32_t matrix_dim2;
 
+    struct pim_vectors vectors_descriptor;
+    struct pim_gemv gemv_descriptor;
+
     int ret;
 
     current_start_free_mem_offset = 0;
-
-    struct pim_vectors vectors_descriptor;
-    struct pim_gemv gemv_descriptor;
 
     switch (cmd) {
     case IOCTL_VADD: {
@@ -187,11 +188,16 @@ static long pim_device_ioctl(struct file *file, unsigned int cmd,
             return ret;
         }
 
-        vadd_from_userspace(vectors_descriptor.result_vector_user_addr,
-                            kernel_vector_a, kernel_vector_b, len);
+        ret = vadd_from_userspace(vectors_descriptor.result_vector_user_addr,
+                                  kernel_vector_a, kernel_vector_b, len);
 
         kfree(kernel_vector_a);
         kfree(kernel_vector_b);
+
+        if (ret) {
+            return ret;
+        }
+
         break;
     }
     case IOCTL_VMUL: {
@@ -207,11 +213,15 @@ static long pim_device_ioctl(struct file *file, unsigned int cmd,
             return ret;
         }
 
-        vmul_from_userspace(vectors_descriptor.result_vector_user_addr,
-                            kernel_vector_a, kernel_vector_b, len);
+        ret = vmul_from_userspace(vectors_descriptor.result_vector_user_addr,
+                                  kernel_vector_a, kernel_vector_b, len);
 
         kfree(kernel_vector_a);
         kfree(kernel_vector_b);
+
+        if (ret) {
+            return ret;
+        }
         break;
     }
 
@@ -227,12 +237,17 @@ static long pim_device_ioctl(struct file *file, unsigned int cmd,
             return ret;
         }
 
-        gemv_from_userspace(gemv_descriptor.result_vector_user_addr,
-                            kernel_input_vector, kernel_matrix,
-                            len_input_vector, matrix_dim1, matrix_dim2);
+        ret = gemv_from_userspace(gemv_descriptor.result_vector_user_addr,
+                                  kernel_input_vector, kernel_matrix,
+                                  len_input_vector, matrix_dim1, matrix_dim2);
 
         kfree(kernel_input_vector);
         kfree(kernel_matrix);
+
+        if (ret) {
+            return ret;
+        }
+
         break;
     }
 
@@ -248,15 +263,16 @@ static struct file_operations fops = {
 };
 
 static int __init pim_bridge_init(void) {
+    int major_number;
     pr_warn("Loading PIM-Bridge kernel module\n");
 
-    int major_number = register_chrdev(MAJOR_NUM, DEVICE_NAME, &fops);
+    major_number = register_chrdev(MAJOR_NUM, DEVICE_NAME, &fops);
     if (major_number < 0) {
         pr_err("Failed to register a major number\n");
         return major_number;
     }
-    pr_err("Module loaded. Create a device file with:\n");
-    pr_err("mknod /dev/%s c %d 0\n", DEVICE_NAME, MAJOR_NUM);
+    pr_info("Module loaded. Create a device file with:\n");
+    pr_info("mknod /dev/%s c %d 0\n", DEVICE_NAME, MAJOR_NUM);
 
     pim_config_virt_addr =
         ioremap(PIM_CONFIG_MEMORY_REGION_BASE, PIM_CONFIG_MEMORY_REGION_SIZE);
@@ -265,18 +281,21 @@ static int __init pim_bridge_init(void) {
 
     if (!pim_config_virt_addr) {
         pr_err("ioremap config failed\n");
+        unregister_chrdev(MAJOR_NUM, DEVICE_NAME);
         return -ENOMEM;
     }
 
     if (!pim_data_virt_addr) {
         pr_err("ioremap data failed\n");
+        iounmap(pim_config_virt_addr);
+        unregister_chrdev(MAJOR_NUM, DEVICE_NAME);
         return -ENOMEM;
     }
 
     pr_info("Initialized PIM-Region starting at: %px\n", pim_data_virt_addr);
 
-    // This code triggers the PIM-VM without being called from the User Library
-    // current_start_free_mem_offset = 0;
+    // This code triggers the PIM-VM without needing a call from the User
+    // Library current_start_free_mem_offset = 0; 
     // vadd_driver_code();
     // current_start_free_mem_offset = 0;
     // vmul_driver_code();

@@ -17,11 +17,10 @@ int write_config_bytes(const char *data, size_t length) {
 }
 
 int set_bank_mode(pim_bank_mode_t bank_mode) {
-    pr_err("Setting Bank Mode to: %d\n", bank_mode);
-    pr_info("Setting Bank Mode to: %d\n", bank_mode);
-
     char buffer[128];
     const char *bank_mode_str;
+
+    pr_info("Setting Bank Mode to: %d\n", bank_mode);
 
     switch (bank_mode) {
     case SINGLE_BANK:
@@ -48,19 +47,31 @@ int set_bank_mode(pim_bank_mode_t bank_mode) {
 
 int set_kernel(kernel_builder_t builder) {
     Microkernel kernel;
-    int success_kernel_builder = builder(&kernel);
+    int ret;
+    char *buffer;
+    char *ptr;
+    size_t remaining;
+    int written;
+    int total_written;
+    int result;
+
+    ret = builder(&kernel);
+    if (ret != 0) {
+        pr_err("PIM: Kernel builder function failed with error %d\n", ret);
+        return ret;
+    }
 
 #define BUFFER_SIZE 2048
-    char *buffer = kmalloc(BUFFER_SIZE, GFP_KERNEL);
+    buffer = kmalloc(BUFFER_SIZE, GFP_KERNEL);
     if (!buffer) {
         pr_err("Couldn't allocate memory\n");
         return -ENOMEM;
     }
-    char *ptr = buffer;
-    size_t remaining = BUFFER_SIZE;
-    int written = 0;
-    int total_written = 0;
-    int result = 0;
+    ptr = buffer;
+    remaining = BUFFER_SIZE;
+    written = 0;
+    total_written = 0;
+    result = 0;
 
     written = snprintf(ptr, remaining, "{\"bank_mode\":null,\"kernel\":[");
     if (written < 0 || written >= remaining) {

@@ -13,6 +13,11 @@
 // For Testing => Contains f16-Floats in UINT16-Format
 #include "../../testing_helper/f16_lut.h"
 
+/**
+ * Executes a vector multiplication (VMUL) operation on the PIM units by issuing
+ * memory-mapped triggers for MOV, MUL, FILL, and EXIT operations across all
+ * chunks of the input vectors.
+ */
 static int vmul_execute(uint16_t __iomem *vector_a_address,
                         uint16_t __iomem *vector_b_address,
                         uint16_t __iomem *vector_result_address,
@@ -55,16 +60,21 @@ static int vmul_execute(uint16_t __iomem *vector_a_address,
     return 0;
 }
 
+/**
+ * Executes a vector multiplication (VMUL) operation entirely within the kernel
+ * for testing purposes.
+ */
 void vmul_driver_code(void) {
 
     int kernel_blocks;
-    const int ROWS = 256;
     uint16_t vector_arr_a[256];
     uint16_t __iomem *vector_a_address;
     uint16_t vector_arr_b[256];
     uint16_t __iomem *vector_b_address;
     uint16_t __iomem *vector_result_address;
     uint16_t __iomem *dummy_region_address;
+
+    ROWS = 256;
 
     kernel_blocks = set_kernel(build_kernel_vmul_X1);
     pr_info("Building kernel success: %d\n", kernel_blocks);
@@ -88,32 +98,32 @@ void vmul_driver_code(void) {
     // uint16_t __iomem *vector_b_address = init_vector(vector_arr_b, 3);
 
     // Pattern Sample
-    uint16_t pattern_a[] = {
-        0x0000, // 0.0
-        0x3C00, // 1.0
-        0x4000, // 2.0"
-    };
-    for (int i = 0; i < ROWS; i++) {
-        vector_arr_a[i] = pattern_a[i % 3];
-    }
-    vector_a_address = init_vector(vector_arr_a, ROWS);
-
-    uint16_t pattern_b[] = {
-        0x3C00, // 1.0
-        0x4000, // 2.0
-        0x0000, // 0.0
-    };
-    for (int i = 0; i < ROWS; i++) {
-        vector_arr_b[i] = pattern_b[i % 3];
-    }
-    vector_b_address = init_vector(vector_arr_b, ROWS);
-
-    // // Example for testing for different row-sizes and kernel_block sizes
-    // memset16(vector_arr_a, 0x4000, ROWS);
+    // uint16_t pattern_a[] = {
+    //     0x0000, // 0.0
+    //     0x3C00, // 1.0
+    //     0x4000, // 2.0"
+    // };
+    // for (int i = 0; i < ROWS; i++) {
+    //     vector_arr_a[i] = pattern_a[i % 3];
+    // }
     // vector_a_address = init_vector(vector_arr_a, ROWS);
 
-    // memset16(vector_arr_b, 0x4200, ROWS);
+    // uint16_t pattern_b[] = {
+    //     0x3C00, // 1.0
+    //     0x4000, // 2.0
+    //     0x0000, // 0.0
+    // };
+    // for (int i = 0; i < ROWS; i++) {
+    //     vector_arr_b[i] = pattern_b[i % 3];
+    // }
     // vector_b_address = init_vector(vector_arr_b, ROWS);
+
+    // Example for testing for different row-sizes and kernel_block sizes
+    memset16(vector_arr_a, 0x4000, ROWS);
+    vector_a_address = init_vector(vector_arr_a, ROWS);
+
+    memset16(vector_arr_b, 0x4200, ROWS);
+    vector_b_address = init_vector(vector_arr_b, ROWS);
 
     // Init result vector
     vector_result_address = init_vector_result(ROWS);
@@ -143,8 +153,13 @@ void vmul_driver_code(void) {
     }
 }
 
-void vmul_from_userspace(__u64 result_addr, uint16_t *vector_arr_a,
-                         uint16_t *vector_arr_b, int len) {
+/**
+ * Executes a vector multiplication (VMUL) operation using input vectors from
+ * user space. Initializes PIM memory regions, performs the VMUL operation, and
+ * copies the result back to user space.
+ */
+int vmul_from_userspace(__u64 result_addr, uint16_t *vector_arr_a,
+                        uint16_t *vector_arr_b, int len) {
     const int ROWS = len;
     int kernel_blocks;
     uint16_t __iomem *vector_a_address;
@@ -154,38 +169,35 @@ void vmul_from_userspace(__u64 result_addr, uint16_t *vector_arr_a,
     uint16_t *kernel_result_buffer = NULL;
     int i;
 
-    pr_err("ROWS: %d\n", ROWS);
-
     kernel_blocks = set_kernel(build_kernel_vmul_X1);
-    pr_err("kernel_blocks: %d\n", kernel_blocks);
+    pr_info("kernel_blocks: %d\n", kernel_blocks);
 
     vector_a_address = init_vector(vector_arr_a, ROWS);
-    uint16_t __iomem *vec_a_addr = vector_a_address;
+    if (!vector_a_address) {
+        pr_err("PIM: Failed to init vector a\n");
+        return -ENOMEM;
+    }
+
     vector_b_address = init_vector(vector_arr_b, ROWS);
-    uint16_t __iomem *vec_b_addr = vector_b_address;
-
-    pr_err("Adresse von vector_a_address: %p\n", vector_a_address);
-    pr_err("Adresse von vector_b_address: %p\n", vector_b_address);
-
-    // pr_err("--------- vector a IS ---------:");
-    // for (i = 0; i < ROWS; i++) {
-    //     uint16_t val = ioread16(vec_a_addr);
-    //     pr_err("VAL: (hex): 0x%x\n", val);
-    //     vec_a_addr++;
-    // }
-    // pr_err("--------- vector b IS ---------:");
-    // for (i = 0; i < ROWS; i++) {
-    //     uint16_t val = ioread16(vec_b_addr);
-    //     pr_err("VAL: (hex): 0x%x\n", val);
-    //     vec_b_addr++;
-    // }
+    if (!vector_a_address) {
+        pr_err("PIM: Failed to init vector b\n");
+        return -ENOMEM;
+    }
 
     // Init result vector
     vector_result_address = init_vector_result(ROWS);
+    if (!vector_result_address) {
+        pr_err("PIM: Failed to init result vector\n");
+        return -ENOMEM;
+    }
 
     // Init dummy memory region for syncing operations that don't need data from
     // memory
     dummy_region_address = init_dummy_memory_region();
+    if (!dummy_region_address) {
+        pr_err("PIM: Failed to init dummy region\n");
+        return -ENOMEM;
+    }
 
     // Guarantee that vectors and PIM_DATA_REGION is correctly initialized
     dsb(SY);
@@ -199,29 +211,27 @@ void vmul_from_userspace(__u64 result_addr, uint16_t *vector_arr_a,
 
     set_bank_mode(SINGLE_BANK);
 
-    
-
     // Init a buffer for the result vector
     kernel_result_buffer = kmalloc(ROWS * sizeof(uint16_t), GFP_KERNEL);
     if (!kernel_result_buffer) {
         pr_err("PIM: Failed to allocate kernel buffer for result\n");
-        return;
+        return -ENOMEM;
     }
 
     // Fill the result Buffer
-    // pr_err("--------- VMUL: RESULT-VECTOR IS ---------:");
     for (i = 0; i < ROWS; i++) {
         kernel_result_buffer[i] = ioread16(vector_result_address + i);
-        // pr_err("VAL: (hex): 0x%x\n", kernel_result_buffer[i]);
     }
 
     // Copy the result back to the userspace
     if (copy_to_user((void __user *)result_addr, kernel_result_buffer,
                      ROWS * sizeof(uint16_t))) {
         pr_err("PIM: Failed to copy result vector to user space\n");
+        return -EFAULT;
     } else {
         pr_info("PIM: Successfully copied result to user space.\n");
     }
 
     kfree(kernel_result_buffer);
+    return 0;
 }

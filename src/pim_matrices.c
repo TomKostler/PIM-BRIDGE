@@ -2,6 +2,14 @@
 #include "../include/pim_data_allocator.h"
 #include "../include/pim_memory_region.h"
 
+// Default Sizes (Can be changed in the drivers)
+int MATRIX_ROWS = 128;
+int MATRIX_COLS = 128;
+
+int X16_ROWS;
+int X16_COLUMNS;
+int ELEMENT_COUNT_SUBMATRIX;
+
 void transform_matrix(const uint16_t *original_matrix,
                       uint16_t *transformed_matrix) {
     const int NUM_ELEMENTS_IN_BLOCK =

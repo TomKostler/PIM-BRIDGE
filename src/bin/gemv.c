@@ -17,12 +17,23 @@
 #define FIX_POINT_SHIFT 10
 #define FIX_POINT_MASK ((1 << FIX_POINT_SHIFT) - 1)
 
+/**
+ * Converts a fixed-point value to a 16-bit IEEE 754 floating-point
+ * representation (FP16).
+ */
 static uint16_t fixed_to_f16_engine(uint64_t fixed_val) {
+    int msb_pos;
+    int actual_exponent;
+    int biased_exponent;
+    int shift;
+    uint16_t mantissa;
+    uint64_t shifted_val;
+
     if (fixed_val == 0) {
         return 0;
     }
 
-    int msb_pos = 0;
+    msb_pos = 0;
     for (int i = 63; i >= 0; i--) {
         if ((fixed_val >> i) & 1) {
             msb_pos = i;
@@ -30,35 +41,41 @@ static uint16_t fixed_to_f16_engine(uint64_t fixed_val) {
         }
     }
 
-    int actual_exponent = msb_pos - FIX_POINT_SHIFT;
-    int biased_exponent = actual_exponent + 15;
+    actual_exponent = msb_pos - FIX_POINT_SHIFT;
+    biased_exponent = actual_exponent + 15;
 
     if (biased_exponent >= 0x1F) {
         return 0x7C00;
     }
 
     if (biased_exponent > 0) {
-        int shift = msb_pos - 10;
-        uint16_t mantissa = (shift >= 0) ? (fixed_val >> shift) & 0x3FF
-                                         : (fixed_val << -shift) & 0x3FF;
+        shift = msb_pos - 10;
+        mantissa = (shift >= 0) ? (fixed_val >> shift) & 0x3FF
+                                : (fixed_val << -shift) & 0x3FF;
         return (biased_exponent << 10) | mantissa;
 
     } else {
-        int shift = 1 - biased_exponent;
+        shift = 1 - biased_exponent;
 
         if (shift > msb_pos + 1) {
             return 0;
         }
 
-        uint64_t shifted_val = fixed_val >> (msb_pos - 10 + shift);
+        shifted_val = fixed_val >> (msb_pos - 10 + shift);
         return (uint16_t)(shifted_val & 0x3FF);
     }
 }
 
+/**
+ * Converts separate integer and fractional parts into a single 16-bit FP16
+ * value.
+ */
 static uint16_t kernel_parts_to_f16(int32_t integer_part,
                                     int32_t fractional_part) {
     uint16_t sign = 0;
     uint32_t binary_fractional_part;
+    uint64_t fixed_val;
+    uint16_t magnitude_f16;
 
     // Get sign
     if (integer_part < 0) {
@@ -72,10 +89,10 @@ static uint16_t kernel_parts_to_f16(int32_t integer_part,
     binary_fractional_part = ((uint64_t)fractional_part * 1024) / 1000;
 
     // Combining the two parts
-    uint64_t fixed_val = ((uint64_t)integer_part << FIX_POINT_SHIFT) |
-                         (binary_fractional_part & 0x3FF);
+    fixed_val = ((uint64_t)integer_part << FIX_POINT_SHIFT) |
+                (binary_fractional_part & 0x3FF);
 
-    uint16_t magnitude_f16 = fixed_to_f16_engine(fixed_val);
+    magnitude_f16 = fixed_to_f16_engine(fixed_val);
 
     return sign | magnitude_f16;
 }
@@ -138,8 +155,8 @@ static inline int32_t f16_to_fixed_point(uint16_t f16_val) {
  * before summation.
  */
 static void
-accumulate_result_vector(int32_t result_integer_part[MATRIX_ROWS],
-                         int32_t result_fractional_part[MATRIX_ROWS],
+accumulate_result_vector(int32_t *result_integer_part,
+                         int32_t *result_fractional_part,
                          uint16_t __iomem *output_partial_sum_vector) {
     for (int i = 0; i < MATRIX_ROWS; i++) {
         int64_t accumulated_row = 0;
@@ -170,13 +187,13 @@ static void gemv_execute(uint16_t __iomem *matrix_base_addr,
                          uint16_t __iomem *output_vector_base_addr,
                          uint16_t __iomem *dummy_region_address) {
     const size_t INPUT_VECTOR_BLOCK_STRIDE =
-        NUM_BANKS * ELEMENT_COUNT_SUBMATRIX * 2;
+        NUM_BANKS * ELEMENT_COUNT_SUBMATRIX;
     const size_t STRIPE_STRIDE = (size_t)MATRIX_ROWS * ELEMENT_COUNT_SUBMATRIX;
     const size_t BLOCK_IN_STRIPE_STRIDE =
         ELEMENT_COUNT_SUBMATRIX * ELEMENT_COUNT_SUBMATRIX;
 
     // === 1. Read input vector ===
-    for (int i = 0; i < X16_ROWS; ++i) {
+    for (int i = 0; i < X16_COLUMNS; ++i) {
         trigger_read(input_vector_base_addr + i * INPUT_VECTOR_BLOCK_STRIDE);
     }
 
@@ -196,7 +213,7 @@ static void gemv_execute(uint16_t __iomem *matrix_base_addr,
     dsb(sy);
 
     // === Execute FILL's for writing the output vector ===
-    for (int i = 0; i < X16_ROWS; ++i) {
+    for (int i = 0; i < X16_COLUMNS; ++i) {
         trigger_write(output_vector_base_addr + i * BLOCK_IN_STRIPE_STRIDE);
     }
 
@@ -204,22 +221,85 @@ static void gemv_execute(uint16_t __iomem *matrix_base_addr,
     trigger_read(dummy_region_address);
 }
 
+static void print_pim_memory_layout(const char *title,
+                                    const volatile void __iomem *base_addr,
+                                    size_t num_elements) {
+    const volatile uint16_t __iomem *ptr = base_addr;
+    uint16_t val;
+    size_t i;
+
+    pr_err("--- %s ---\n", title);
+
+    for (i = 0; i < num_elements; ++i) {
+        val = ioread16(ptr + i);
+        pr_err("%04zu: (0x%04X)\n", i, val);
+
+        if ((i + 1) % 16 == 0) {
+            pr_err("\n");
+        }
+    }
+    pr_err("--- End of %s ---\n", title);
+}
+
+/**
+ * Executes a general matrix-vector multiplication (GEMV) using predefined test
+ * data in kernel space.
+ */
 void gemv_driver_code(void) {
 
-    uint16_t input_vector_data[MATRIX_ROWS];
-    static uint16_t matrix_data[MATRIX_ROWS * MATRIX_COLS];
-    static uint16_t transformed_matrix_data[MATRIX_ROWS * MATRIX_COLS];
-    int32_t result_integer_part[MATRIX_ROWS];
-    int32_t result_fractional_part[MATRIX_ROWS];
+    uint16_t *input_vector_data = NULL;
+    uint16_t *matrix_data = NULL;
+    uint16_t *transformed_matrix_data = NULL;
+    int32_t *result_integer_part = NULL;
+    int32_t *result_fractional_part = NULL;
 
-    uint16_t __iomem *input_vector_address;
-    uint16_t __iomem *init_matrix_address;
-    uint16_t __iomem *dummy_region_address;
-    uint16_t __iomem *output_partial_sum_vector;
+    uint16_t __iomem *input_vector_address = NULL;
+    uint16_t __iomem *init_matrix_address = NULL;
+    uint16_t __iomem *dummy_region_address = NULL;
+    uint16_t __iomem *output_partial_sum_vector = NULL;
+
+    int ret = 0;
+
+    // Overwriting the default value
+    MATRIX_ROWS = 128;
+    MATRIX_COLS = 128;
+
+    X16_ROWS = (MATRIX_ROWS / 16);
+    X16_COLUMNS = (MATRIX_COLS / 16);
+    ELEMENT_COUNT_SUBMATRIX = 16;
+
+    input_vector_data =
+        kmalloc_array(MATRIX_ROWS, sizeof(uint16_t), GFP_KERNEL);
+    if (!input_vector_data) {
+        ret = -ENOMEM;
+    }
+
+    matrix_data =
+        kmalloc_array(MATRIX_ROWS, MATRIX_COLS * sizeof(uint16_t), GFP_KERNEL);
+    if (!matrix_data) {
+        ret = -ENOMEM;
+    }
+
+    transformed_matrix_data =
+        kmalloc_array(MATRIX_ROWS, MATRIX_COLS * sizeof(uint16_t), GFP_KERNEL);
+    if (!transformed_matrix_data) {
+        ret = -ENOMEM;
+    }
+
+    result_integer_part =
+        kmalloc_array(MATRIX_ROWS, sizeof(int32_t), GFP_KERNEL);
+    if (!result_integer_part) {
+        ret = -ENOMEM;
+    }
+
+    result_fractional_part =
+        kmalloc_array(MATRIX_ROWS, sizeof(int32_t), GFP_KERNEL);
+    if (!result_fractional_part) {
+        ret = -ENOMEM;
+    }
 
     // Set Microkernel to vadd
-    int success_kernel = set_kernel(build_kernel_gemv);
-    pr_err("Building kernel success: %d\n", success_kernel);
+    set_kernel(build_kernel_gemv);
 
     // ------------- Init the Input Vector -------------
     // in an interleaved manner for faster access for the PIM-Units
@@ -228,6 +308,13 @@ void gemv_driver_code(void) {
     }
     input_vector_address =
         init_vector_interleaved(input_vector_data, MATRIX_ROWS / X16_ROWS);
+
+    pr_err("--- Validating PIM Vector Layout in C-Kernel ---\n");
+    print_pim_memory_layout("Interleaved Vector Memory Layout (C Kernel)",
+                              input_vector_address,
+                              (size_t)X16_COLUMNS * NUM_BANKS *
+                              ELEMENT_COUNT_SUBMATRIX);
+
     // -------------------------------------------
 
     // ------------- Init the Matrix -------------
@@ -242,15 +329,9 @@ void gemv_driver_code(void) {
         }
     }
 
-    // For testing purposes
-    // for (size_t i = 0; i < MATRIX_ROWS * MATRIX_COLS; ++i) {
-    //     matrix_data[i] = 0x3c00;
-    // }
-
     transform_matrix(matrix_data, transformed_matrix_data);
     init_matrix_address =
         init_matrix_flat(transformed_matrix_data, MATRIX_ROWS * MATRIX_COLS);
-    // -------------------------------------------
 
     // Init result vector
     output_partial_sum_vector = init_vector_result(MATRIX_ROWS * X16_ROWS);
@@ -290,60 +371,85 @@ void gemv_driver_code(void) {
     pr_err("Done.");
 }
 
-void gemv_from_userspace(__u64 result_addr, uint16_t *kernel_input_vector,
-                         uint16_t *kernel_matrix, uint32_t len_input_vector,
-                         uint32_t matrix_dim1, uint32_t matrix_dim2) {
+/**
+ * Executes a general matrix-vector multiplication (GEMV) using input data from
+ * user space. Initializes PIM memory regions, performs the GEMV operation, and
+ * copies the result back to user space.
+ */
+int gemv_from_userspace(__u64 result_addr, uint16_t *kernel_input_vector,
+                        uint16_t *kernel_matrix, uint32_t len_input_vector,
+                        uint32_t matrix_dim1, uint32_t matrix_dim2) {
 
     int32_t *result_integer_part = NULL;
     int32_t *result_fractional_part = NULL;
     uint16_t *transformed_matrix_data = NULL;
+    uint16_t *polished_result = NULL;
+
+    uint16_t __iomem *input_vector_address = NULL;
+    uint16_t __iomem *init_matrix_address = NULL;
+    uint16_t __iomem *dummy_region_address = NULL;
+    uint16_t __iomem *output_partial_sum_vector = NULL;
+
     int ret = 0;
 
-    uint16_t __iomem *input_vector_address;
-    uint16_t __iomem *init_matrix_address;
-    uint16_t __iomem *dummy_region_address;
-    uint16_t __iomem *output_partial_sum_vector;
+    // Overwriting the default value
+    MATRIX_ROWS = 128;
+    MATRIX_COLS = 128;
+
+    X16_ROWS = (MATRIX_ROWS / 16);
+    X16_COLUMNS = (MATRIX_COLS / 16);
+    ELEMENT_COUNT_SUBMATRIX = 16;
 
     if (matrix_dim1 == 0 || matrix_dim2 == 0 || (matrix_dim1 % 16) != 0 ||
         (matrix_dim2 % 16) != 0) {
         pr_err("PIM_GEMV: Invalid matrix dimensions (%u x %u). Must be "
                "non-zero and a multiple of 16.\n",
                matrix_dim1, matrix_dim2);
-        return;
+        return -EINVAL;
     }
 
-    const int MATRIX_ROWS_CONST = matrix_dim1;
-    const int MATRIX_COLS_CONST = matrix_dim2;
-    const int X16_ROWS_CONST = (MATRIX_ROWS_CONST / 16);
-
-    result_integer_part =
-        kmalloc(MATRIX_ROWS_CONST * sizeof(int32_t), GFP_KERNEL);
-    result_fractional_part =
-        kmalloc(MATRIX_ROWS_CONST * sizeof(int32_t), GFP_KERNEL);
-    transformed_matrix_data = kmalloc(
-        MATRIX_ROWS_CONST * MATRIX_COLS_CONST * sizeof(uint16_t), GFP_KERNEL);
+    result_integer_part = kmalloc(MATRIX_ROWS * sizeof(int32_t), GFP_KERNEL);
+    result_fractional_part = kmalloc(MATRIX_ROWS * sizeof(int32_t), GFP_KERNEL);
+    transformed_matrix_data =
+        kmalloc(MATRIX_ROWS * MATRIX_COLS * sizeof(uint16_t), GFP_KERNEL);
+    polished_result = kmalloc(MATRIX_ROWS * sizeof(uint16_t), GFP_KERNEL);
 
     // Test if allocation was successfull
     if (!result_integer_part || !result_fractional_part ||
-        !transformed_matrix_data) {
+        !transformed_matrix_data || !polished_result) {
         pr_err("PIM_GEMV: Failed to allocate memory on the heap.\n");
         ret = -ENOMEM;
         goto cleanup;
     }
 
-    int success_kernel = set_kernel(build_kernel_gemv);
-    pr_info("PIM_GEMV: Building kernel success: %d\n", success_kernel);
+    set_kernel(build_kernel_gemv);
 
-    input_vector_address = init_vector_interleaved(
-        kernel_input_vector, MATRIX_ROWS_CONST / X16_ROWS_CONST);
+    input_vector_address =
+        init_vector_interleaved(kernel_input_vector, MATRIX_ROWS / X16_ROWS);
+    if (!input_vector_address) {
+        ret = -ENOMEM;
+        goto cleanup;
+    }
 
     transform_matrix(kernel_matrix, transformed_matrix_data);
-    init_matrix_address = init_matrix_flat(
-        transformed_matrix_data, MATRIX_ROWS_CONST * MATRIX_COLS_CONST);
+    init_matrix_address =
+        init_matrix_flat(transformed_matrix_data, MATRIX_ROWS * MATRIX_COLS);
+    if (!init_matrix_address) {
+        ret = -ENOMEM;
+        goto cleanup;
+    }
 
-    output_partial_sum_vector =
-        init_vector_result(MATRIX_ROWS_CONST * X16_ROWS_CONST);
+    output_partial_sum_vector = init_vector_result(MATRIX_ROWS * X16_ROWS);
+    if (!output_partial_sum_vector) {
+        ret = -ENOMEM;
+        goto cleanup;
+    }
+
     dummy_region_address = init_dummy_memory_region();
+    if (!dummy_region_address) {
+        ret = -ENOMEM;
+        goto cleanup;
+    }
 
     dsb(SY);
     set_bank_mode(PIM_ALL_BANK);
@@ -359,25 +465,16 @@ void gemv_from_userspace(__u64 result_addr, uint16_t *kernel_input_vector,
     accumulate_result_vector(result_integer_part, result_fractional_part,
                              output_partial_sum_vector);
 
-    // pr_err("--------- GEMV RESULT-VECTOR IS ---------:");
-    // pr_err("MATRIX ROWS: %d\n", MATRIX_ROWS_CONST);
-    // for (int i = 0; i < MATRIX_ROWS_CONST; i++) {
-    //     pr_err("VAL %d: %d.%03u, ", i, result_integer_part[i],
-    //            result_fractional_part[i]);
-    // }
-
     // Convert the result back to IEEE 754 16-Bit representation
-    uint16_t *polished_result =
-        kmalloc(MATRIX_ROWS_CONST * sizeof(uint16_t), GFP_KERNEL);
-    for (int i = 0; i < MATRIX_ROWS_CONST; i++) {
+    for (int i = 0; i < MATRIX_ROWS; i++) {
         polished_result[i] = kernel_parts_to_f16(result_integer_part[i],
                                                  result_fractional_part[i]);
     }
-    pr_err("Done.\n");
 
     if (copy_to_user((void __user *)result_addr, polished_result,
-                     MATRIX_ROWS_CONST * sizeof(uint16_t))) {
+                     MATRIX_ROWS * sizeof(uint16_t))) {
         pr_err("PIM: Failed to copy result vector to user\n");
+        ret = -EFAULT;
     } else {
         pr_info("PIM: Successfully copied result to user space.\n");
     }
@@ -387,4 +484,6 @@ cleanup:
     kfree(result_fractional_part);
     kfree(result_integer_part);
     kfree(polished_result);
+
+    return ret;
 }

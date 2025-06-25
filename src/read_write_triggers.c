@@ -1,7 +1,6 @@
 #include "../include/read_write_triggers.h"
 #include <linux/io.h>
 
-
 int trigger_write(void __iomem *address) {
     iowrite8(0, address);
     dsb(SY);

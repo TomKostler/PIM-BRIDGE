@@ -4,6 +4,8 @@
 size_t current_start_free_mem_offset = 0;
 
 void __iomem *pim_data_region_alloc(size_t size, size_t alignment) {
+    void __iomem *addr;
+
     phys_addr_t phys_base_addr =
         PIM_DATA_MEMORY_REGION_BASE + current_start_free_mem_offset;
 
@@ -17,9 +19,8 @@ void __iomem *pim_data_region_alloc(size_t size, size_t alignment) {
         return NULL;
     }
 
-    void __iomem *addr =
-        (void __iomem *)((u8 __iomem *)pim_data_virt_addr +
-                         current_start_free_mem_offset + offset);
+    addr = (void __iomem *)((u8 __iomem *)pim_data_virt_addr +
+                            current_start_free_mem_offset + offset);
     current_start_free_mem_offset += offset + size;
     return addr;
 }
