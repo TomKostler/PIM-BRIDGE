@@ -1,0 +1,455 @@
+#include <fcntl.h>
+#include <math.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+
+#define COLOR_RESET "\x1b[0m"
+#define COLOR_BLACK "\x1b[30m"
+#define COLOR_RED "\x1b[31m"
+#define COLOR_GREEN "\x1b[32m"
+#define COLOR_YELLOW "\x1b[33m"
+#define COLOR_BLUE "\x1b[34m"
+#define COLOR_MAGENTA "\x1b[35m"
+#define COLOR_CYAN "\x1b[36m"
+#define COLOR_WHITE "\x1b[37m"
+
+#define STYLE_BOLD "\x1b[1m"
+
+struct pim_vectors {
+    uint64_t vector_a_user_addr;
+    uint64_t vector_b_user_addr;
+    uint64_t result_vector_user_addr;
+    uint32_t len1;
+    uint32_t len2;
+};
+
+struct pim_gemv {
+    uint64_t input_vector_user_addr;
+    uint64_t matrix_user_addr;
+    uint64_t result_vector_user_addr;
+    uint32_t input_vector_len;
+    uint32_t matrix_dim1;
+    uint32_t matrix_dim2;
+};
+
+#define MAJOR_NUM 100
+#define DEVICE_PATH "/dev/pim_device"
+#define IOCTL_VADD _IOWR(MAJOR_NUM, 2, struct pim_vectors)
+#define IOCTL_VMUL _IOWR(MAJOR_NUM, 3, struct pim_vectors)
+#define IOCTL_GEMV _IOWR(MAJOR_NUM, 4, struct pim_gemv)
+
+typedef union {
+    float f;
+    uint32_t u;
+} FloatUnion;
+
+uint16_t float_to_f16(float f) {
+    FloatUnion fu;
+    fu.f = f;
+
+    // Extract sign, exponent and mantissa from 32-bit float
+    uint16_t sign = (fu.u >> 16) & 0x8000;
+    int32_t exponent =
+        ((fu.u >> 23) & 0xFF) - 127; // Exponent with a bias of 127
+    uint32_t mantissa = fu.u & 0x7FFFFF;
+
+    // Handle Infinity and NaN cases
+    if (exponent == 128) {
+        return sign | (0x1F << 10) | (mantissa ? 0x200 : 0);
+    }
+
+    // Handle underflow to zero
+    if (exponent < -24) {
+        return sign;
+    }
+
+    // Handle numbers that become denormalized in f16
+    if (exponent < -14) {
+        mantissa = (mantissa | 0x800000) >> (14 - abs(exponent));
+        return sign | (mantissa >> 13);
+    }
+
+    // Handle overflow to infinity
+    if (exponent > 15) {
+        return sign | (0x1F << 10);
+    }
+
+    // Process normal numbers
+    uint16_t new_exponent = (exponent + 15) & 0x1F;
+    uint16_t new_mantissa = mantissa >> 13;
+
+    return sign | (new_exponent << 10) | new_mantissa;
+}
+
+float f16_to_float(uint16_t f16_val) {
+    FloatUnion fu;
+
+    // Extract sign, exponent, and mantissa from the 16-bit float
+    uint32_t sign = (f16_val >> 15) & 0x01;
+    int32_t exponent = (f16_val >> 10) & 0x1F;
+    uint32_t mantissa = f16_val & 0x03FF;
+
+    // Handle special cases
+    if (exponent == 0x1F) { // Infinity or NaN
+        // Set all exponent bits for f32
+        fu.u = (sign << 31) | 0x7F800000 | (mantissa << 13);
+        return fu.f;
+    }
+    if (exponent == 0) { // Zero or denormalized number
+        if (mantissa == 0) {
+            fu.u = (sign << 31);
+            return fu.f; // +/- 0.0f
+        }
+        // It's a denormalized number => normalize it
+        while (!(mantissa & 0x0400)) {
+            mantissa <<= 1;
+            exponent--;
+        }
+        mantissa &= 0x03FF;
+        exponent++;
+    }
+
+    // Process normalized numbers
+    exponent = (exponent - 15) + 127;
+    mantissa <<= 13;
+
+    // Combine parts into the 32-bit float format
+    fu.u = (sign << 31) | (exponent << 23) | mantissa;
+
+    return fu.f;
+}
+
+void print_vector_operation(const char *title, const uint16_t *vec_a,
+                            const uint16_t *vec_b, const uint16_t *vec_res,
+                            uint32_t len) {
+    printf("\n" STYLE_BOLD COLOR_YELLOW "--- %s ---" COLOR_RESET "\n", title);
+    printf(COLOR_BLUE "========================================================"
+                      "\n" COLOR_RESET);
+    printf(COLOR_CYAN "%-6s | %-12s | %-12s | %-12s\n" COLOR_RESET, "Index",
+           "Vector a", "Vector b", "result");
+    printf(
+        COLOR_BLUE
+        "-------+--------------+--------------+--------------\n" COLOR_RESET);
+
+    for (int i = 0; i < len; i++) {
+        printf("%-6d | %-12.4f | %-12.4f | " COLOR_GREEN "%-12.4f" COLOR_RESET
+               "\n",
+               i, f16_to_float(vec_a[i]), f16_to_float(vec_b[i]),
+               f16_to_float(vec_res[i]));
+    }
+
+    printf(COLOR_BLUE "========================================================"
+                      "\n\n\n" COLOR_RESET);
+}
+
+void print_gemv_operation(const char *title, const uint16_t *input_vec,
+                          uint32_t input_vec_len, const uint16_t *matrix,
+                          uint32_t matrix_rows, uint32_t matrix_cols,
+                          const uint16_t *result_vec, uint32_t result_vec_len) {
+
+    const int preview_size = 6;
+
+    printf("\n" STYLE_BOLD COLOR_YELLOW "--- %s ---" COLOR_RESET "\n", title);
+    printf(COLOR_BLUE "========================================================"
+                      "\n" COLOR_RESET);
+
+    printf(COLOR_CYAN "Input Vector (length: %u):" COLOR_RESET "\n[",
+           input_vec_len);
+    for (int i = 0; i < input_vec_len; ++i) {
+        if (i < preview_size || i >= input_vec_len - preview_size) {
+            printf(COLOR_YELLOW " %.2f" COLOR_RESET,
+                   f16_to_float(input_vec[i]));
+        } else if (i == preview_size) {
+            printf(" ...");
+        }
+    }
+    printf(" ]\n\n");
+
+    printf(COLOR_CYAN "Matrix (Dimension: %u x %u):" COLOR_RESET "\n",
+           matrix_rows, matrix_cols);
+    for (int r = 0; r < matrix_rows; ++r) {
+        if (r < preview_size || r >= matrix_rows - preview_size) {
+            printf(" [");
+            for (int c = 0; c < matrix_cols; ++c) {
+                if (c < preview_size || c >= matrix_cols - preview_size) {
+                    printf(COLOR_MAGENTA "%6.1f" COLOR_RESET,
+                           f16_to_float(matrix[(size_t)r * matrix_cols + c]));
+                } else if (c == preview_size) {
+                    printf("  ...  ");
+                }
+            }
+            printf(" ]\n");
+        } else if (r == preview_size) {
+            printf("   (...)\n");
+        }
+    }
+    printf("\n");
+
+    printf(COLOR_CYAN "Result Vector (length: %u):" COLOR_RESET "\n",
+           result_vec_len);
+    for (int i = 0; i < result_vec_len; ++i) {
+        if (i > 0 && i % 8 == 0) {
+            printf("\n");
+        }
+        printf(STYLE_BOLD COLOR_GREEN " %8.2f" COLOR_RESET,
+               f16_to_float(result_vec[i]));
+    }
+    printf("\n");
+    printf(COLOR_BLUE "========================================================"
+                      "\n\n\n" COLOR_RESET);
+}
+
+
+
+void test_vadd_negative(int fd, uint32_t len) {
+    uint16_t *a = malloc(len * sizeof(uint16_t));
+    uint16_t *b = malloc(len * sizeof(uint16_t));
+    uint16_t *res = malloc(len * sizeof(uint16_t));
+    if (!a || !b || !res) {
+        perror("Malloc for vadd failed");
+        free(a); free(b); free(res);
+        return;
+    }
+
+    for (uint32_t i = 0; i < len; i++) {
+        if (i % 3 == 0) {
+            a[i] = float_to_f16(0.0f);
+            b[i] = float_to_f16(-5.0f);
+        } else if (i % 3 == 1) {
+            a[i] = float_to_f16(-5.0f);
+            b[i] = float_to_f16(5.0f);
+        } else {
+            a[i] = float_to_f16(10.0f);
+            b[i] = float_to_f16(-5.0f);
+        }
+    }
+
+    struct pim_vectors desc;
+    desc.vector_a_user_addr = (uint64_t)a;
+    desc.vector_b_user_addr = (uint64_t)b;
+    desc.result_vector_user_addr = (uint64_t)res;
+    desc.len1 = len;
+    desc.len2 = len;
+
+    if (ioctl(fd, IOCTL_VADD, &desc) < 0) {
+        perror("ioctl(IOCTL_VADD) for negative test failed");
+    } else {
+        print_vector_operation("Vektor-add ", a, b, res, len);
+    }
+
+    free(a);
+    free(b);
+    free(res);
+}
+
+
+void test_vmul_special_values(int fd, uint32_t len) {
+    printf(STYLE_BOLD "\n--- VMUL Testcase:  ---\n" COLOR_RESET);
+    uint16_t *a = malloc(len * sizeof(uint16_t));
+    uint16_t *b = malloc(len * sizeof(uint16_t));
+    uint16_t *res = malloc(len * sizeof(uint16_t));
+    if (!a || !b || !res) {
+        perror("malloc failed");
+        free(a); free(b); free(res);
+        return;
+    }
+
+    for (uint32_t i = 0; i < len; i++) {
+        a[i] = float_to_f16((i % 3 == 2) ? 5.0f : 12.5f);
+        b[i] = float_to_f16((float)(i % 3 - 1));
+    }
+
+    struct pim_vectors desc;
+    desc.vector_a_user_addr = (uint64_t)a;
+    desc.vector_b_user_addr = (uint64_t)b;
+    desc.result_vector_user_addr = (uint64_t)res;
+    desc.len1 = len;
+    desc.len2 = len;
+
+    if (ioctl(fd, IOCTL_VMUL, &desc) < 0) {
+        perror("ioctl(IOCTL_VMUL) failed");
+    } else {
+        print_vector_operation("Vektor-mult ", a, b, res, len);
+    }
+
+    free(a);
+    free(b);
+    free(res);
+}
+
+void test_gemv_identity_matrix(int fd, uint32_t dim) {
+    printf(STYLE_BOLD "\n--- GEMV Test: Identity Matrix ---\n" COLOR_RESET);
+    if (dim % 16 != 0) {
+        printf("Dimension must be multiple of 16.\n");
+        return;
+    }
+
+    uint16_t *vec = malloc(dim * sizeof(uint16_t));
+    uint16_t *mat = calloc(dim * dim, sizeof(uint16_t));
+    uint16_t *res = malloc(dim * sizeof(uint16_t));
+    if (!vec || !mat || !res) {
+        perror("malloc/calloc failed");
+        free(vec); free(mat); free(res);
+        return;
+    }
+
+    for (uint32_t i = 0; i < dim; i++) {
+        // vec[i] = float_to_f16((float)i);
+        vec[i] = float_to_f16(5.0f);
+    }
+
+    for (uint32_t i = 0; i < dim; i++) {
+        mat[i * dim + i] = float_to_f16(1.0f);
+    }
+
+    struct pim_gemv desc;
+    desc.input_vector_user_addr = (uint64_t)vec;
+    desc.matrix_user_addr = (uint64_t)mat;
+    desc.result_vector_user_addr = (uint64_t)res;
+    desc.input_vector_len = dim;
+    desc.matrix_dim1 = dim;
+    desc.matrix_dim2 = dim;
+
+    if (ioctl(fd, IOCTL_GEMV, &desc) < 0) {
+        perror("ioctl(IOCTL_GEMV) failed");
+    } else {
+        print_gemv_operation("GEMV (Identity test)", vec, dim, mat, dim, dim, res, dim);
+    }
+
+    free(vec);
+    free(mat);
+    free(res);
+}
+
+int main() {
+    int fd = -1;
+    struct pim_vectors pim_vectors_desc;
+    struct pim_gemv pim_gemv_desc;
+    int ret_status = EXIT_SUCCESS;
+
+    uint16_t *vector_arr_a = NULL;
+    uint16_t *vector_arr_b = NULL;
+    uint16_t *result_vector = NULL;
+    uint16_t *result_vector_gemv = NULL;
+    uint16_t *matrix_data = NULL;
+
+    const uint32_t vector_len = 256;
+    const int MATRIX_ROWS = 128;
+    const int MATRIX_COLS = 128;
+    uint16_t input_vector_data[MATRIX_ROWS];
+
+    vector_arr_a = malloc(vector_len * sizeof(uint16_t));
+    vector_arr_b = malloc(vector_len * sizeof(uint16_t));
+    result_vector = malloc(vector_len * sizeof(uint16_t));
+
+    if (!vector_arr_a || !vector_arr_b || !result_vector) {
+        perror("malloc for vectors failed");
+        ret_status = EXIT_FAILURE;
+        goto cleanup;
+    }
+
+    // --- Prepare Vectors ---
+    uint16_t pattern_a[] = {float_to_f16(0), float_to_f16(1), float_to_f16(2)};
+    for (int i = 0; i < vector_len; i++) {
+        vector_arr_a[i] = pattern_a[i % 3];
+    }
+
+    uint16_t pattern_b[] = {float_to_f16(1), float_to_f16(2), float_to_f16(0)};
+    for (int i = 0; i < vector_len; i++) {
+        vector_arr_b[i] = pattern_b[i % 3];
+    }
+
+    // --- Prepare GEMV data ---
+    result_vector_gemv = malloc(MATRIX_ROWS * sizeof(uint16_t));
+    for (int i = 0; i < MATRIX_ROWS; ++i) {
+        input_vector_data[i] = float_to_f16(1);
+    }
+
+    matrix_data = calloc(MATRIX_ROWS * MATRIX_COLS, sizeof(uint16_t));
+    if (!matrix_data) {
+        perror("calloc for matrix_data failed");
+        ret_status = EXIT_FAILURE;
+        goto cleanup;
+    }
+
+    for (int r = 0; r < MATRIX_ROWS; ++r) {
+        for (int c = 0; c < MATRIX_COLS; ++c) {
+            if (r >= c) {
+                matrix_data[(size_t)r * MATRIX_COLS + c] = float_to_f16(1);
+            }
+        }
+    }
+
+    // --- Open the Device ---
+    fd = open(DEVICE_PATH, O_RDWR);
+    if (fd < 0) {
+        perror("Failed to open device file. Did you run 'sudo mknod'?");
+        ret_status = EXIT_FAILURE;
+        goto cleanup;
+    }
+
+    // --- IOCTL-CALLS ---
+    printf("Calling IOCTL_VADD...\n");
+    pim_vectors_desc.vector_a_user_addr = (uint64_t)vector_arr_a;
+    pim_vectors_desc.vector_b_user_addr = (uint64_t)vector_arr_b;
+    pim_vectors_desc.result_vector_user_addr = (uint64_t)result_vector;
+    pim_vectors_desc.len1 = vector_len;
+    pim_vectors_desc.len2 = vector_len;
+
+    printf("Calling VADD ...\n");
+    if (ioctl(fd, IOCTL_VADD, &pim_vectors_desc) < 0) {
+        perror("ioctl(IOCTL_VADD) failed");
+    } else {
+        print_vector_operation("Vector Addition (VADD)", vector_arr_a,
+                               vector_arr_b, result_vector, vector_len);
+    }
+
+    printf("Calling VMUL ...\n");
+    if (ioctl(fd, IOCTL_VMUL, &pim_vectors_desc) < 0) {
+        perror("ioctl(IOCTL_VMUL) failed");
+    } else {    
+        print_vector_operation("Vector Multiplication (VMUL)", vector_arr_a,
+                               vector_arr_b, result_vector, vector_len);
+    }
+
+    
+    pim_gemv_desc.input_vector_user_addr = (uint64_t)input_vector_data;
+    pim_gemv_desc.matrix_user_addr = (uint64_t)matrix_data;
+    pim_gemv_desc.input_vector_len = MATRIX_ROWS;
+    pim_gemv_desc.result_vector_user_addr = (uint64_t)result_vector_gemv;
+    pim_gemv_desc.matrix_dim1 = MATRIX_ROWS;
+    pim_gemv_desc.matrix_dim2 = MATRIX_COLS;
+
+    printf("Calling GEMV ...\n");
+    if (ioctl(fd, IOCTL_GEMV, &pim_gemv_desc) < 0) {
+        perror("ioctl(IOCTL_GEMV) failed");
+    } else {
+        print_gemv_operation("GEMV", input_vector_data, MATRIX_COLS,
+                             matrix_data, MATRIX_ROWS, MATRIX_COLS,
+                             result_vector_gemv, MATRIX_ROWS);
+    }
+
+
+
+    test_vadd_negative(fd, vector_len);
+    test_vmul_special_values(fd, vector_len);
+    test_gemv_identity_matrix(fd, 128);
+
+
+cleanup:
+    printf("Cleaning up and exiting userspace programm.\n");
+    if (fd >= 0) {
+        close(fd);
+    }
+    free(vector_arr_a);
+    free(vector_arr_b);
+    free(matrix_data);
+    free(result_vector);
+    free(result_vector_gemv);
+
+    return ret_status;
+}
