@@ -26,8 +26,8 @@ static int vmul_execute(uint16_t __iomem *vector_a_address,
 
     int num_chunks = (vector_length + (NUM_BANKS * ELEMENTS_PER_BANK - 1)) /
                      (NUM_BANKS * ELEMENTS_PER_BANK);
-    pr_err("num_chunks reads: %d, kernel_blocks: %d\n", num_chunks,
-           kernel_blocks);
+    pr_info("num_chunks reads: %d, kernel_blocks: %d\n", num_chunks,
+            kernel_blocks);
 
     for (int i = 0; i < num_chunks; i++) {
 
@@ -36,7 +36,8 @@ static int vmul_execute(uint16_t __iomem *vector_a_address,
         // Triggers MOV in PIM-VM
         for (int j = 0; j < kernel_blocks; j++) {
             trigger_read(vector_a_address + chunk_size_elements * i);
-            pr_err("vector_a read triggered, address: %px\n", vector_a_address);
+            pr_info("vector_a read triggered, address: %px\n",
+                    vector_a_address);
         }
 
         // Triggers ADD in PIM-VM
@@ -169,7 +170,28 @@ int vmul_from_userspace(__u64 result_addr, uint16_t *vector_arr_a,
     uint16_t *kernel_result_buffer = NULL;
     int i;
 
-    kernel_blocks = set_kernel(build_kernel_vmul_X1);
+    kernel_builder_t builder;
+    switch (len) {
+    case 256:
+        builder = build_kernel_vmul_X1;
+        break;
+    case 512:
+        builder = build_kernel_vmul_X2;
+        break;
+    case 1024:
+        builder = build_kernel_vmul_X3;
+        break;
+    case 2048:
+        builder = build_kernel_vmul_X4;
+        break;
+    default:
+        pr_err("vectors length must be either 256, 512, 1024 or 2048 for the "
+               "PIM-HW to efficiently process them. If the vectors are too "
+               "short, just fill them up with zeros.");
+        return -ENOMEM;
+    }
+
+    kernel_blocks = set_kernel(builder);
     pr_info("kernel_blocks: %d\n", kernel_blocks);
 
     vector_a_address = init_vector(vector_arr_a, ROWS);

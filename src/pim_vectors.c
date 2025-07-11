@@ -28,6 +28,7 @@ void __iomem *init_vector(uint16_t *arr, size_t length) {
         current_addr++;
         dsb(SY);
     }
+
     return vector_start_addr;
 }
 

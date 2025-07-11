@@ -319,15 +319,15 @@ int parse_instruction_to_string(char *buffer, size_t size,
         break;
 
     default:
-        pr_err("Unbekannter InstructionType: %d\n", instr->type);
+        pr_err("Undefined InstructionType: %d\n", instr->type);
         return -EINVAL;
     }
 
     // Final Check
     if (written < 0 || written >= remaining) {
     buffer_error:
-        pr_err("Fehler oder Puffer zu klein beim Parsen von Instruktion %d "
-               "(benötigt: %d, verfügbar: %zu)\n",
+        pr_err("Error or buffer too small %d "
+               "(needed: %d, available: %zu)\n",
                instr->type, written, remaining);
         return -ENOMEM;
     }

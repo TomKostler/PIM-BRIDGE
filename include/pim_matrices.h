@@ -3,12 +3,12 @@
 
 #include <linux/types.h>
 
-extern int MATRIX_ROWS;
-extern int MATRIX_COLS;
+extern const int MATRIX_ROWS;
+extern const int MATRIX_COLS;
 
-extern int X16_ROWS;
-extern int X16_COLUMNS;
-extern int ELEMENT_COUNT_SUBMATRIX;
+extern const int X16_ROWS;
+extern const int X16_COLUMNS;
+extern const int ELEMENT_COUNT_SUBMATRIX;
 
 /**
  * Rearranges a flat, row-major matrix into a tiled layout for efficient PIM

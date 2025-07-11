@@ -60,7 +60,6 @@ int set_kernel(kernel_builder_t builder) {
         pr_err("PIM: Kernel builder function failed with error %d\n", ret);
         return ret;
     }
-
 #define BUFFER_SIZE 2048
     buffer = kmalloc(BUFFER_SIZE, GFP_KERNEL);
     if (!buffer) {

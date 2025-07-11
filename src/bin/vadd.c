@@ -26,8 +26,8 @@ static int vadd_execute(uint16_t __iomem *vector_a_address,
 
     int num_chunks = (vector_length + (NUM_BANKS * ELEMENTS_PER_BANK - 1)) /
                      (NUM_BANKS * ELEMENTS_PER_BANK);
-    pr_err("num_chunks reads: %d, kernel_blocks: %d\n", num_chunks,
-           kernel_blocks);
+    pr_info("num_chunks reads: %d, kernel_blocks: %d\n", num_chunks,
+            kernel_blocks);
 
     // Loop through all 512 Bit of the vectors => Calculated in Chunks
     for (int i = 0; i < num_chunks; i++) {
@@ -77,10 +77,10 @@ void vadd_driver_code(void) {
     uint16_t __iomem *dummy_region_address = NULL;
     int i;
 
+    ROWS = 256;
+
     vector_arr_a = kmalloc(ROWS * sizeof(uint16_t), GFP_KERNEL);
     vector_arr_b = kmalloc(ROWS * sizeof(uint16_t), GFP_KERNEL);
-
-    ROWS = 256;
 
     // Set Microkernel to vadd
     kernel_blocks = set_kernel(build_kernel_vadd_X1);
@@ -171,6 +171,7 @@ void vadd_driver_code(void) {
  */
 int vadd_from_userspace(__u64 result_addr, uint16_t *vector_arr_a,
                         uint16_t *vector_arr_b, int len) {
+
     const int ROWS = len;
     int kernel_blocks;
     uint16_t __iomem *vector_a_address;
@@ -180,8 +181,30 @@ int vadd_from_userspace(__u64 result_addr, uint16_t *vector_arr_a,
     uint16_t *kernel_result_buffer = NULL;
     int i;
 
-    kernel_blocks = set_kernel(build_kernel_vadd_X1);
-    pr_err("kernel_blocks: %d\n", kernel_blocks);
+    kernel_builder_t builder;
+
+    switch (len) {
+    case 256:
+        builder = build_kernel_vadd_X1;
+        break;
+    case 512:
+        builder = build_kernel_vadd_X2;
+        break;
+    case 1024:
+        builder = build_kernel_vadd_X3;
+        break;
+    case 2048:
+        builder = build_kernel_vadd_X4;
+        break;
+    default:
+        pr_err("vectors length must be either 256, 512, 1024 or 2048 for the "
+               "PIM-HW to efficiently process them. If the vectors are too "
+               "short, just fill them up with zeros.");
+        return -ENOMEM;
+    }
+
+    kernel_blocks = set_kernel(builder);
+    // pr_err("kernel_blocks: %d\n", kernel_blocks);
 
     vector_a_address = init_vector(vector_arr_a, ROWS);
     if (!vector_a_address) {
@@ -219,6 +242,7 @@ int vadd_from_userspace(__u64 result_addr, uint16_t *vector_arr_a,
 
     vadd_execute(vector_a_address, vector_b_address, vector_result_address,
                  dummy_region_address, ROWS, kernel_blocks);
+
 
     set_bank_mode(SINGLE_BANK);
 
