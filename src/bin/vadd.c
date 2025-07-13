@@ -253,7 +253,7 @@ int vadd_from_userspace(__u64 result_addr, uint16_t *vector_arr_a,
         return -ENOMEM;
     }
 
-    // Fill the result Buffer
+    // Fill the result buffer
     for (i = 0; i < ROWS; i++) {
         kernel_result_buffer[i] = ioread16(vector_result_address + i);
     }

@@ -11,7 +11,6 @@
 #include "../../include/pim_vectors.h"
 #include "../../include/read_write_triggers.h"
 
-#define REPETITIONS 8
 #define F16_ONE 0x3C00
 
 #define FIX_POINT_SHIFT 10
@@ -25,13 +24,7 @@ struct gemv_context {
     // Result pointers
     int32_t *result_integer_part;
     int32_t *result_fractional_part;
-    uint16_t *polished_result;
-
-    // Current indices for the result arrays
-    int index_result_fractured;
-    int index_result_polished;
-
-    int repetitions;
+    uint16_t *result_in_f16_bin;
 };
 
 /**
@@ -167,14 +160,18 @@ static inline int32_t f16_to_fixed_point(uint16_t f16_val) {
 }
 
 /**
- * Accumulates the partial sum vectors from PIM memory to compute the final
- * scalar result for each output row. This reduction is performed on the CPU by
- * it first converting the f16 partial sums into a fixed-point representation
- * before summation.
+ * This function accumulates a partial sum vector from PIM memory by first
+ * converting the f16 values to a fixed-point representation on the CPU. It then
+ * either initializes the result for the corresponding rows when processing the
+ * first column chunk or adds to the existing sum for all subsequent chunks.
  */
 static void
 accumulate_result_vector(struct gemv_context *ctx,
-                         uint16_t __iomem *output_partial_sum_vector) {
+                         uint16_t __iomem *output_partial_sum_vector,
+                         int row_ind_chunk, int col_ind_chunk, int total_rows) {
+
+    int index_result_vector;
+
     for (int i = 0; i < MATRIX_ROWS; i++) {
         int64_t accumulated_row = 0;
         for (int j = 0; j < ELEMENT_COUNT_SUBMATRIX; j++) {
@@ -183,12 +180,33 @@ accumulate_result_vector(struct gemv_context *ctx,
             accumulated_row += val;
             output_partial_sum_vector++;
         }
-        ctx->result_integer_part[ctx->index_result_fractured] =
-            (accumulated_row >> FIX_POINT_SHIFT);
-        ctx->result_fractional_part[ctx->index_result_fractured] =
-            (((abs(accumulated_row) & FIX_POINT_MASK) * 1000) >>
-             FIX_POINT_SHIFT);
-        ctx->index_result_fractured++;
+
+        index_result_vector = row_ind_chunk * 64 + i;
+
+        // Beginning of a new row
+        if (col_ind_chunk == 0) {
+            ctx->result_integer_part[index_result_vector] =
+                (accumulated_row >> FIX_POINT_SHIFT);
+            ctx->result_fractional_part[index_result_vector] =
+                (((abs(accumulated_row) & FIX_POINT_MASK) * 1000) >>
+                 FIX_POINT_SHIFT);
+
+            ctx->result_in_f16_bin[index_result_vector] = kernel_parts_to_f16(
+                ctx->result_integer_part[index_result_vector],
+                ctx->result_fractional_part[index_result_vector]);
+        } else {
+            // Beginning of a new Column-Chunk => Result is added to existing
+            // result for that row chunk
+            ctx->result_integer_part[index_result_vector] +=
+                (accumulated_row >> FIX_POINT_SHIFT);
+            ctx->result_fractional_part[index_result_vector] +=
+                (((abs(accumulated_row) & FIX_POINT_MASK) * 1000) >>
+                 FIX_POINT_SHIFT);
+
+            ctx->result_in_f16_bin[index_result_vector] += kernel_parts_to_f16(
+                ctx->result_integer_part[index_result_vector],
+                ctx->result_fractional_part[index_result_vector]);
+        }
     }
 }
 
@@ -243,9 +261,9 @@ static void gemv_execute(uint16_t __iomem *matrix_base_addr,
  * chunks and writes the total number of chunks into the total_chunks_out
  * parameter.
  */
-static uint16_t **divide_matrix_in_pim_chunks(uint16_t *matrix, uint32_t rows,
-                                              uint32_t cols,
-                                              uint32_t *total_chunks_out) {
+static uint16_t **divide_matrix_in_64x128_chunks(uint16_t *matrix,
+                                                 uint32_t rows, uint32_t cols,
+                                                 uint32_t *total_chunks_out) {
 
     uint32_t num_row_chunks;
     uint32_t num_col_chunks;
@@ -322,7 +340,9 @@ static void free_matrix_chunks(uint16_t **chunks, uint32_t total_chunks) {
  */
 static int gemv_64x128_chunk(struct gemv_context *ctx, uint16_t *matrix_data,
                              uint16_t __iomem *input_vector_address,
-                             uint16_t __iomem *dummy_region_address) {
+                             uint16_t __iomem *dummy_region_address,
+                             int row_ind_chunk, int col_ind_chunk,
+                             int total_rows) {
     uint16_t *transformed_matrix_data = NULL;
     uint16_t __iomem *init_matrix_address = NULL;
     uint16_t __iomem *output_partial_sum_vector = NULL;
@@ -332,7 +352,7 @@ static int gemv_64x128_chunk(struct gemv_context *ctx, uint16_t *matrix_data,
 
     // Test if allocation was successful
     if (!ctx->result_integer_part || !ctx->result_fractional_part ||
-        !transformed_matrix_data || !ctx->polished_result) {
+        !transformed_matrix_data || !ctx->result_in_f16_bin) {
         pr_err("PIM_GEMV: Failed to allocate memory on the heap.\n");
         ret = -ENOMEM;
         goto cleanup;
@@ -355,30 +375,44 @@ static int gemv_64x128_chunk(struct gemv_context *ctx, uint16_t *matrix_data,
     dsb(SY);
     set_bank_mode(PIM_ALL_BANK);
 
-    for (int i = 0; i < ctx->repetitions;
-         ++i) { // Repetitions var is there for simulating and evaluating
-                // matrices with different columns sizes than 128
-        gemv_execute(init_matrix_address, input_vector_address,
-                     output_partial_sum_vector, dummy_region_address);
-        dsb(sy);
-    }
+    gemv_execute(init_matrix_address, input_vector_address,
+                 output_partial_sum_vector, dummy_region_address);
+    dsb(sy);
 
     set_bank_mode(SINGLE_BANK);
 
-    accumulate_result_vector(ctx, output_partial_sum_vector);
-
-    // Convert the result back to IEEE 754 16-Bit representation
-    for (int i = 0; i < 64; i++) {
-        int current_read_idx = ctx->index_result_polished;
-        ctx->polished_result[current_read_idx] =
-            kernel_parts_to_f16(ctx->result_integer_part[current_read_idx],
-                                ctx->result_fractional_part[current_read_idx]);
-        ctx->index_result_polished++;
-    }
+    accumulate_result_vector(ctx, output_partial_sum_vector, row_ind_chunk,
+                             col_ind_chunk, total_rows);
 
 cleanup:
     kfree(transformed_matrix_data);
     return ret;
+}
+
+/**
+ * Splits a flat source vector into 128-element chunks and creates an
+ * interleaved vector for each chunk. Returns a newly allocated array of
+ * pointers to these new vectors.
+ */
+static uint16_t __iomem **init_input_vector(int cols,
+                                            uint16_t *input_vector_data) {
+    int num_input_vectors = cols / 128;
+
+    uint16_t __iomem **new_vectors =
+        kmalloc_array(num_input_vectors, sizeof(uint16_t *), GFP_KERNEL);
+    if (!new_vectors) {
+        return NULL;
+    }
+
+    for (int i = 0; i < num_input_vectors; i++) {
+        new_vectors[i] =
+            init_vector_interleaved(input_vector_data + i * 128, 8);
+        if (!new_vectors[i]) {
+            kfree(new_vectors);
+            return NULL;
+        }
+    }
+    return new_vectors;
 }
 
 /**
@@ -388,23 +422,27 @@ cleanup:
 void gemv_driver_code(void) {
     uint16_t *input_vector_data = NULL;
     uint16_t *matrix_data = NULL;
-    uint16_t __iomem *input_vector_address = NULL;
     uint16_t __iomem *dummy_region_address = NULL;
     uint16_t **all_chunks_data = NULL;
     uint32_t num_chunks_data = 0;
+
+    uint16_t __iomem **input_vectors = NULL;
     int ret = 0;
+
+    int rows = 512;
+    int cols = 256;
 
     // Create the context struct
     struct gemv_context ctx;
     memset(&ctx, 0, sizeof(struct gemv_context));
 
-    input_vector_data = kmalloc_array(128, sizeof(uint16_t), GFP_KERNEL);
+    input_vector_data = kmalloc_array(cols, sizeof(uint16_t), GFP_KERNEL);
     if (!input_vector_data) {
         ret = -ENOMEM;
         goto cleanup;
     }
 
-    matrix_data = kmalloc_array(1024, 128 * sizeof(uint16_t), GFP_KERNEL);
+    matrix_data = kmalloc_array(rows, cols * sizeof(uint16_t), GFP_KERNEL);
     if (!matrix_data) {
         ret = -ENOMEM;
         goto cleanup;
@@ -412,43 +450,48 @@ void gemv_driver_code(void) {
 
     // ------------- Init the Input Vector -------------
     // in an interleaved manner for faster access for the PIM-Units
-    for (int i = 0; i < 128; ++i) {
+    // for (int i = 0; i < cols / 2; ++i) {
+    //     input_vector_data[i] = F16_ONE;
+    // }
+    // for (int i = 0; i < cols / 2; ++i) {
+    //     input_vector_data[cols / 2 + i] = 0x4000;
+    // }
+
+    for (int i = 0; i < cols; ++i) {
         input_vector_data[i] = F16_ONE;
     }
 
     // ------------- Init the Matrix -------------
-    memset(matrix_data, 0, 1024 * 128 * sizeof(uint16_t));
-    for (int r = 0; r < 1024; ++r) {
-        for (int c = 0; c < 128; ++c) {
+    memset(matrix_data, 0, rows * cols * sizeof(uint16_t));
+    for (int r = 0; r < rows; ++r) {
+        for (int c = 0; c < cols; ++c) {
             if (r >= c) {
-                size_t idx = (size_t)r * 128 + c;
+                size_t idx = (size_t)r * cols + c;
                 matrix_data[idx] = F16_ONE;
             }
         }
     }
 
-    all_chunks_data =
-        divide_matrix_in_pim_chunks(matrix_data, 1024, 128, &num_chunks_data);
+    all_chunks_data = divide_matrix_in_64x128_chunks(matrix_data, rows, cols,
+                                                     &num_chunks_data);
     if (!all_chunks_data) {
         ret = -ENOMEM;
         goto cleanup;
     }
-    ctx.repetitions = 512 / 128;
 
-    ctx.result_integer_part = kmalloc(1024 * sizeof(int32_t), GFP_KERNEL);
-    ctx.result_fractional_part = kmalloc(1024 * sizeof(int32_t), GFP_KERNEL);
-    ctx.polished_result = kmalloc(1024 * sizeof(uint16_t), GFP_KERNEL);
+    ctx.result_integer_part = kmalloc(rows * sizeof(int32_t), GFP_KERNEL);
+    ctx.result_fractional_part = kmalloc(rows * sizeof(int32_t), GFP_KERNEL);
+    ctx.result_in_f16_bin = kmalloc(rows * sizeof(uint16_t), GFP_KERNEL);
     if (!ctx.result_integer_part || !ctx.result_fractional_part ||
-        !ctx.polished_result) {
+        !ctx.result_in_f16_bin) {
         ret = -ENOMEM;
         goto cleanup;
     }
 
     set_kernel(build_kernel_gemv);
 
-    input_vector_address =
-        init_vector_interleaved(input_vector_data, 64 / 8);
-    if (!input_vector_address) {
+    input_vectors = init_input_vector(cols, input_vector_data);
+    if (!input_vectors) {
         ret = -ENOMEM;
         goto cleanup;
     }
@@ -458,15 +501,17 @@ void gemv_driver_code(void) {
         ret = -ENOMEM;
         goto cleanup;
     }
-    for (int i = 0; i < num_chunks_data; ++i) {
-        uint16_t *current_chunk_ptr = all_chunks_data[i];
-        gemv_64x128_chunk(&ctx, current_chunk_ptr, input_vector_address,
-                          dummy_region_address);
+    for (int i = 0; i < rows / 64; ++i) {
+        for (int j = 0; j < cols / 128; ++j) {
+            uint16_t *current_chunk_ptr = all_chunks_data[i * (cols / 128) + j];
+            gemv_64x128_chunk(&ctx, current_chunk_ptr, input_vectors[j],
+                              dummy_region_address, i, j, rows);
+        }
     }
 
     pr_err("--------- RESULT-VECTOR IS ---------:");
-    pr_err("MATRIX ROWS: %d\n", 1024);
-    for (int i = 0; i < 1024; i++) {
+    pr_err("MATRIX ROWS: %d\n", rows);
+    for (int i = 0; i < rows; i++) {
         pr_err("VAL %d: %d.%03u, ", i, ctx.result_integer_part[i],
                ctx.result_fractional_part[i]);
     }
@@ -476,8 +521,9 @@ cleanup:
     // Free all allocated memory
     kfree(ctx.result_integer_part);
     kfree(ctx.result_fractional_part);
-    kfree(ctx.polished_result);
+    kfree(ctx.result_in_f16_bin);
     kfree(matrix_data);
+    kfree(input_vectors);
     kfree(input_vector_data);
     free_matrix_chunks(all_chunks_data, num_chunks_data);
 
@@ -487,48 +533,47 @@ cleanup:
 }
 
 /**
- * Executes a general matrix-vector multiplication (GEMV) using input data from
- * user space. Initializes PIM memory regions, performs the GEMV operation, and
- * copies the result back to user space.
+ * Executes a general matrix-vector multiplication (GEMV) using input data
+ * from user space. Initializes PIM memory regions, performs the GEMV
+ * operation, and copies the result back to user space.
  */
 int gemv_from_userspace(__u64 result_addr, uint16_t *input_vector_data,
                         uint16_t *matrix_data, uint32_t len_input_vector,
                         uint32_t matrix_rows, uint32_t matrix_cols) {
 
-    uint16_t __iomem *input_vector_address = NULL;
     uint16_t __iomem *dummy_region_address = NULL;
     uint16_t **all_chunks_data = NULL;
     uint32_t num_chunks_data = 0;
+
+    uint16_t __iomem **input_vectors = NULL;
     int ret = 0;
 
     // Create the context struct
     struct gemv_context ctx;
     memset(&ctx, 0, sizeof(struct gemv_context));
 
-    all_chunks_data = divide_matrix_in_pim_chunks(matrix_data, matrix_rows, 128,
-                                                  &num_chunks_data);
+    all_chunks_data = divide_matrix_in_64x128_chunks(
+        matrix_data, matrix_rows, matrix_cols, &num_chunks_data);
     if (!all_chunks_data) {
         ret = -ENOMEM;
         goto cleanup;
     }
 
-    ctx.repetitions = matrix_cols / 128;
-
     ctx.result_integer_part =
         kmalloc(matrix_rows * sizeof(int32_t), GFP_KERNEL);
     ctx.result_fractional_part =
         kmalloc(matrix_rows * sizeof(int32_t), GFP_KERNEL);
-    ctx.polished_result = kmalloc(matrix_rows * sizeof(uint16_t), GFP_KERNEL);
+    ctx.result_in_f16_bin = kmalloc(matrix_rows * sizeof(uint16_t), GFP_KERNEL);
     if (!ctx.result_integer_part || !ctx.result_fractional_part ||
-        !ctx.polished_result) {
+        !ctx.result_in_f16_bin) {
         ret = -ENOMEM;
         goto cleanup;
     }
 
     set_kernel(build_kernel_gemv);
 
-    input_vector_address = init_vector_interleaved(input_vector_data, 64 / 8);
-    if (!input_vector_address) {
+    input_vectors = init_input_vector(matrix_cols, input_vector_data);
+    if (!input_vectors) {
         ret = -ENOMEM;
         goto cleanup;
     }
@@ -538,14 +583,16 @@ int gemv_from_userspace(__u64 result_addr, uint16_t *input_vector_data,
         ret = -ENOMEM;
         goto cleanup;
     }
-
-    for (int i = 0; i < num_chunks_data; ++i) {
-        uint16_t *current_chunk_ptr = all_chunks_data[i];
-        gemv_64x128_chunk(&ctx, current_chunk_ptr, input_vector_address,
-                          dummy_region_address);
+    for (int i = 0; i < matrix_rows / 64; ++i) {
+        for (int j = 0; j < matrix_cols / 128; ++j) {
+            uint16_t *current_chunk_ptr =
+                all_chunks_data[i * (matrix_cols / 128) + j];
+            gemv_64x128_chunk(&ctx, current_chunk_ptr, input_vectors[j],
+                              dummy_region_address, i, j, matrix_rows);
+        }
     }
 
-    if (copy_to_user((void __user *)result_addr, ctx.polished_result,
+    if (copy_to_user((void __user *)result_addr, ctx.result_in_f16_bin,
                      matrix_rows * sizeof(uint16_t))) {
         pr_err("PIM: Failed to copy result vector to user\n");
         ret = -EFAULT;
@@ -557,11 +604,12 @@ cleanup:
     // Free all allocated memory
     kfree(ctx.result_integer_part);
     kfree(ctx.result_fractional_part);
-    kfree(ctx.polished_result);
+    kfree(ctx.result_in_f16_bin);
     free_matrix_chunks(all_chunks_data, num_chunks_data);
 
     if (ret != 0) {
         pr_err("gemv_driver_code failed with error %d\n", ret);
     }
+
     return ret;
 }
