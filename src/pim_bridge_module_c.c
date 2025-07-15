@@ -74,19 +74,11 @@ static int get_gemv_inputs(unsigned long arg, uint16_t **vector_out,
         return -EINVAL;
     }
 
-    // kernel_vector =
-    //     kmalloc(descriptor.input_vector_len * sizeof(uint16_t), GFP_KERNEL);
-    // kernel_matrix = kmalloc(descriptor.matrix_dim1 * descriptor.matrix_dim2 *
-    //                             sizeof(uint16_t),
-    //                         GFP_KERNEL);
-
     kernel_vector = vmalloc(descriptor.input_vector_len * sizeof(uint16_t));
     kernel_matrix = vmalloc(descriptor.matrix_dim1 * descriptor.matrix_dim2 *
                             sizeof(uint16_t));
 
     if (!kernel_vector || !kernel_matrix) {
-        // kfree(kernel_vector);
-        // kfree(kernel_matrix);
         vfree(kernel_vector);
         vfree(kernel_matrix);
         return -ENOMEM;
@@ -114,8 +106,6 @@ static int get_gemv_inputs(unsigned long arg, uint16_t **vector_out,
     return 0;
 
 error_cleanup:
-    // kfree(kernel_vector);
-    // kfree(kernel_matrix);
     vfree(kernel_vector);
     vfree(kernel_matrix);
     return -EFAULT;

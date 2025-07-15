@@ -183,29 +183,23 @@ accumulate_result_vector(struct gemv_context *ctx,
 
         index_result_vector = row_ind_chunk * 64 + i;
 
+        int32_t integer_part = (accumulated_row >> FIX_POINT_SHIFT);
+        int32_t fractional_part =
+            (((abs(accumulated_row) & FIX_POINT_MASK) * 1000) >>
+             FIX_POINT_SHIFT);
+
         // Beginning of a new row
         if (col_ind_chunk == 0) {
-            ctx->result_integer_part[index_result_vector] =
-                (accumulated_row >> FIX_POINT_SHIFT);
-            ctx->result_fractional_part[index_result_vector] =
-                (((abs(accumulated_row) & FIX_POINT_MASK) * 1000) >>
-                 FIX_POINT_SHIFT);
-
-            ctx->result_in_f16_bin[index_result_vector] = kernel_parts_to_f16(
-                ctx->result_integer_part[index_result_vector],
-                ctx->result_fractional_part[index_result_vector]);
+            ctx->result_integer_part[index_result_vector] = integer_part;
+            ctx->result_fractional_part[index_result_vector] = fractional_part;
         } else {
-            // Beginning of a new Column-Chunk => Result is added to existing
-            // result for that row chunk
-            ctx->result_integer_part[index_result_vector] +=
-                (accumulated_row >> FIX_POINT_SHIFT);
-            ctx->result_fractional_part[index_result_vector] +=
-                (((abs(accumulated_row) & FIX_POINT_MASK) * 1000) >>
-                 FIX_POINT_SHIFT);
+            ctx->result_integer_part[index_result_vector] += integer_part;
 
-            ctx->result_in_f16_bin[index_result_vector] += kernel_parts_to_f16(
-                ctx->result_integer_part[index_result_vector],
-                ctx->result_fractional_part[index_result_vector]);
+            ctx->result_fractional_part[index_result_vector] += fractional_part;
+            if (ctx->result_fractional_part[index_result_vector] >= 1000) {
+                ctx->result_integer_part[index_result_vector]++;
+                ctx->result_fractional_part[index_result_vector] -= 1000;
+            }
         }
     }
 }
@@ -429,20 +423,19 @@ void gemv_driver_code(void) {
     uint16_t __iomem **input_vectors = NULL;
     int ret = 0;
 
-    int rows = 512;
-    int cols = 256;
+    int rows = 1024;
+    int cols = 4096;
 
     // Create the context struct
     struct gemv_context ctx;
     memset(&ctx, 0, sizeof(struct gemv_context));
 
-    input_vector_data = kmalloc_array(cols, sizeof(uint16_t), GFP_KERNEL);
+    input_vector_data = vmalloc((size_t)cols * sizeof(uint16_t));
     if (!input_vector_data) {
         ret = -ENOMEM;
         goto cleanup;
     }
-
-    matrix_data = kmalloc_array(rows, cols * sizeof(uint16_t), GFP_KERNEL);
+    matrix_data = vmalloc((size_t)rows * cols * sizeof(uint16_t));
     if (!matrix_data) {
         ret = -ENOMEM;
         goto cleanup;
@@ -478,6 +471,8 @@ void gemv_driver_code(void) {
         ret = -ENOMEM;
         goto cleanup;
     }
+
+    pr_err("NUM_CHUNKS: %d\n", num_chunks_data);
 
     ctx.result_integer_part = kmalloc(rows * sizeof(int32_t), GFP_KERNEL);
     ctx.result_fractional_part = kmalloc(rows * sizeof(int32_t), GFP_KERNEL);
@@ -522,9 +517,9 @@ cleanup:
     kfree(ctx.result_integer_part);
     kfree(ctx.result_fractional_part);
     kfree(ctx.result_in_f16_bin);
-    kfree(matrix_data);
+    vfree(matrix_data);
     kfree(input_vectors);
-    kfree(input_vector_data);
+    vfree(input_vector_data);
     free_matrix_chunks(all_chunks_data, num_chunks_data);
 
     if (ret != 0) {
@@ -590,6 +585,12 @@ int gemv_from_userspace(__u64 result_addr, uint16_t *input_vector_data,
             gemv_64x128_chunk(&ctx, current_chunk_ptr, input_vectors[j],
                               dummy_region_address, i, j, matrix_rows);
         }
+    }
+
+    // Transform result back to IEEE f16 bin represntation
+    for (int i = 0; i < matrix_rows; i++) {
+        ctx.result_in_f16_bin[i] = kernel_parts_to_f16(
+            ctx.result_integer_part[i], ctx.result_fractional_part[i]);
     }
 
     if (copy_to_user((void __user *)result_addr, ctx.result_in_f16_bin,
