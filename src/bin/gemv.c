@@ -16,6 +16,8 @@
 #define FIX_POINT_SHIFT 10
 #define FIX_POINT_MASK ((1 << FIX_POINT_SHIFT) - 1)
 
+#define EVALUATION_MODE 1
+
 /**
  * Context structure to encapsulate all state variables for an operation.
  * => Avoids global variables
@@ -25,6 +27,8 @@ struct gemv_context {
     int32_t *result_integer_part;
     int32_t *result_fractional_part;
     uint16_t *result_in_f16_bin;
+
+    int repetitions;
 };
 
 /**
@@ -171,6 +175,8 @@ accumulate_result_vector(struct gemv_context *ctx,
                          int row_ind_chunk, int col_ind_chunk, int total_rows) {
 
     int index_result_vector;
+    int32_t integer_part;
+    int32_t fractional_part;
 
     for (int i = 0; i < MATRIX_ROWS; i++) {
         int64_t accumulated_row = 0;
@@ -183,10 +189,9 @@ accumulate_result_vector(struct gemv_context *ctx,
 
         index_result_vector = row_ind_chunk * 64 + i;
 
-        int32_t integer_part = (accumulated_row >> FIX_POINT_SHIFT);
-        int32_t fractional_part =
-            (((abs(accumulated_row) & FIX_POINT_MASK) * 1000) >>
-             FIX_POINT_SHIFT);
+        integer_part = (accumulated_row >> FIX_POINT_SHIFT);
+        fractional_part = (((abs(accumulated_row) & FIX_POINT_MASK) * 1000) >>
+                           FIX_POINT_SHIFT);
 
         // Beginning of a new row
         if (col_ind_chunk == 0) {
@@ -369,8 +374,19 @@ static int gemv_64x128_chunk(struct gemv_context *ctx, uint16_t *matrix_data,
     dsb(SY);
     set_bank_mode(PIM_ALL_BANK);
 
-    gemv_execute(init_matrix_address, input_vector_address,
-                 output_partial_sum_vector, dummy_region_address);
+    if (EVALUATION_MODE) {
+        for (int i = 0; i < ctx->repetitions;
+             ++i) { // Repetitions var is there for simulating and evaluating
+                    // matrices with different columns sizes than 128
+            gemv_execute(init_matrix_address, input_vector_address,
+                         output_partial_sum_vector, dummy_region_address);
+            dsb(sy);
+        }
+    } else {
+        gemv_execute(init_matrix_address, input_vector_address,
+                     output_partial_sum_vector, dummy_region_address);
+    }
+
     dsb(sy);
 
     set_bank_mode(SINGLE_BANK);
@@ -424,7 +440,7 @@ void gemv_driver_code(void) {
     int ret = 0;
 
     int rows = 1024;
-    int cols = 4096;
+    int cols = 128;
 
     // Create the context struct
     struct gemv_context ctx;
@@ -472,7 +488,7 @@ void gemv_driver_code(void) {
         goto cleanup;
     }
 
-    pr_err("NUM_CHUNKS: %d\n", num_chunks_data);
+    // pr_err("NUM_CHUNKS: %d\n", num_chunks_data);
 
     ctx.result_integer_part = kmalloc(rows * sizeof(int32_t), GFP_KERNEL);
     ctx.result_fractional_part = kmalloc(rows * sizeof(int32_t), GFP_KERNEL);
@@ -496,11 +512,26 @@ void gemv_driver_code(void) {
         ret = -ENOMEM;
         goto cleanup;
     }
-    for (int i = 0; i < rows / 64; ++i) {
-        for (int j = 0; j < cols / 128; ++j) {
-            uint16_t *current_chunk_ptr = all_chunks_data[i * (cols / 128) + j];
-            gemv_64x128_chunk(&ctx, current_chunk_ptr, input_vectors[j],
-                              dummy_region_address, i, j, rows);
+
+    if (EVALUATION_MODE) {
+        // Use repetitions to simulate Matrix read/writes, otherwise too much
+        // RAM usage for large evaluation matrices
+
+        ctx.repetitions = 512 / 128; // Only needed when in Evaluation mode
+        for (int i = 0; i < num_chunks_data; ++i) {
+            uint16_t *current_chunk_ptr = all_chunks_data[i];
+            gemv_64x128_chunk(&ctx, current_chunk_ptr, input_vectors[0],
+                              dummy_region_address, i, 0, rows);
+        }
+
+    } else {
+        for (int i = 0; i < rows / 64; ++i) {
+            for (int j = 0; j < cols / 128; ++j) {
+                uint16_t *current_chunk_ptr =
+                    all_chunks_data[i * (cols / 128) + j];
+                gemv_64x128_chunk(&ctx, current_chunk_ptr, input_vectors[j],
+                                  dummy_region_address, i, j, rows);
+            }
         }
     }
 
@@ -578,12 +609,27 @@ int gemv_from_userspace(__u64 result_addr, uint16_t *input_vector_data,
         ret = -ENOMEM;
         goto cleanup;
     }
-    for (int i = 0; i < matrix_rows / 64; ++i) {
-        for (int j = 0; j < matrix_cols / 128; ++j) {
-            uint16_t *current_chunk_ptr =
-                all_chunks_data[i * (matrix_cols / 128) + j];
-            gemv_64x128_chunk(&ctx, current_chunk_ptr, input_vectors[j],
-                              dummy_region_address, i, j, matrix_rows);
+
+    if (EVALUATION_MODE) {
+        // Use repetitions to simulate Matrix read/writes, otherwise too much
+        // RAM usage for large evaluation matrices
+
+        ctx.repetitions =
+            matrix_cols / 128; // Only needed when in Evaluation mode
+        for (int i = 0; i < num_chunks_data; ++i) {
+            uint16_t *current_chunk_ptr = all_chunks_data[i];
+            gemv_64x128_chunk(&ctx, current_chunk_ptr, input_vectors[0],
+                              dummy_region_address, i, 0, matrix_rows);
+        }
+
+    } else {
+        for (int i = 0; i < matrix_rows / 64; ++i) {
+            for (int j = 0; j < matrix_cols / 128; ++j) {
+                uint16_t *current_chunk_ptr =
+                    all_chunks_data[i * (matrix_cols / 128) + j];
+                gemv_64x128_chunk(&ctx, current_chunk_ptr, input_vectors[j],
+                                  dummy_region_address, i, j, matrix_rows);
+            }
         }
     }
 
