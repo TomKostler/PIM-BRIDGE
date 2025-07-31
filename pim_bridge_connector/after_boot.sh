@@ -12,7 +12,7 @@ printf "Version 6.43 \n"
 printf " -------------------- \n"
 ls
 cat after_boot.sh
-printf "--------------------- \n"
+printf " --------------------- \n"
 
 
 printf "AFTER_BOOT.SH: Reading PIM-Bridge kernel module ... \n"
@@ -24,14 +24,10 @@ printf "AFTER_BOOT.SH: insmod kernel module into kernel ... \n"
 sudo insmod /tmp/script
 printf "AFTER_BOOT.SH: insmod done\n"
 
-sync
-sleep 1
-
 
 printf "Creating device file ...\n"
 sudo mknod /dev/pim_device c 100 0
 sudo chmod 666 /dev/pim_device
-
 
 printf "Syncing filesystem...\n"
 sync
@@ -39,6 +35,7 @@ sleep 1
 
 printf "Compiling User Lib ...\n"
 gcc userspace_programm_test.c -o userspace_programm_test
+gem5-bridge --addr=0x10010000 exit # Change cpu to O3 model
 ./userspace_programm_test
 printf " ---------------------------------- \n"
 
