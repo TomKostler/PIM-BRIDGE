@@ -9,10 +9,10 @@ int write_config_bytes(const char *data, size_t length) {
     size_t i;
     for (i = 0; i < length; i++) {
         iowrite8(data[i], pim_config_virt_addr + i);
-        dsb(SY);
     }
 
     iowrite8('\0', pim_config_virt_addr + i);
+    dsb(SY);
     return 0;
 }
 

@@ -1,6 +1,7 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
+#include "../../include/bins.h"
 #include "../../include/microkernels/kernel_datastructures.h"
 #include "../../include/microkernels/kernels.h"
 #include "../../include/pim_configs.h"
@@ -9,6 +10,8 @@
 #include "../../include/pim_memory_region.h"
 #include "../../include/pim_vectors.h"
 #include "../../include/read_write_triggers.h"
+#include <linux/io.h>
+#include <linux/ktime.h>
 
 // For Testing => Contains f16-Floats in UINT16-Format
 #include "../../testing_helper/f16_lut.h"
@@ -26,8 +29,6 @@ static int vadd_execute(uint16_t __iomem *vector_a_address,
 
     int num_chunks = (vector_length + (NUM_BANKS * ELEMENTS_PER_BANK - 1)) /
                      (NUM_BANKS * ELEMENTS_PER_BANK);
-    pr_info("num_chunks reads: %d, kernel_blocks: %d\n", num_chunks,
-            kernel_blocks);
 
     // Loop through all 512 Bit of the vectors => Calculated in Chunks
     for (int i = 0; i < num_chunks; i++) {
@@ -37,28 +38,25 @@ static int vadd_execute(uint16_t __iomem *vector_a_address,
         // Triggers MOV in PIM-VM
         for (int j = 0; j < kernel_blocks; j++) {
             trigger_read(vector_a_address + chunk_size_elements * i);
-            pr_info("vector_a read triggered, address: %px\n",
-                    vector_a_address);
         }
+        mb();
 
         // Triggers ADD in PIM-VM
         for (int j = 0; j < kernel_blocks; j++) {
             trigger_read(vector_b_address + chunk_size_elements * i);
-            pr_info("vector_b read triggered, address: %px\n",
-                    vector_b_address);
         }
+        mb();
 
         // Trigers FILL in PIM-VM
         for (int j = 0; j < kernel_blocks; j++) {
             trigger_write(vector_result_address + chunk_size_elements * i);
-            pr_info("vector_result write triggered, address: %px\n",
-                    vector_result_address);
         }
+        mb();
 
         // Dummy-Region Read => Triggers EXIT in PIM-VM
         trigger_read(dummy_region_address);
+        mb();
     }
-
     return 0;
 }
 
@@ -77,10 +75,11 @@ void vadd_driver_code(void) {
     uint16_t __iomem *dummy_region_address = NULL;
     int i;
 
+    // ROWS = 1 << 20;
     ROWS = 256;
 
-    vector_arr_a = kmalloc(ROWS * sizeof(uint16_t), GFP_KERNEL);
-    vector_arr_b = kmalloc(ROWS * sizeof(uint16_t), GFP_KERNEL);
+    vector_arr_a = vmalloc(ROWS * sizeof(uint16_t));
+    vector_arr_b = vmalloc(ROWS * sizeof(uint16_t));
 
     // Set Microkernel to vadd
     kernel_blocks = set_kernel(build_kernel_vadd_X1);
@@ -88,40 +87,26 @@ void vadd_driver_code(void) {
 
     // Use FP16 numbers to add as uint_16 bit representation, since kernel isn't
     // allowing floats!
-    // uint16_t vector_arr_a[] = {
-    //     0x0000, // 0.0
-    //     0x3C00, // 1.0
-    //     0x4000, // 2.0"
-    // };
-    // uint16_t __iomem *vector_a_address = init_vector(vector_arr_a, ROWS);
-
-    // uint16_t vector_arr_b[] = {
-    //     0x3C00, // 1.0
-    //     0x4000, // 2.0
-    //     0x0000, // 0.0
-    // };
-    // uint16_t __iomem *vector_b_address = init_vector(vector_arr_b, ROWS);
-
     // Pattern Sample
     // uint16_t pattern_a[] = {
     //     0x0000, // 0.0
     //     0x3C00, // 1.0
     //     0x4000, // 2.0"
     // };
-    // for (int i = 0; i < 256; i++) {
+    // for (int i = 0; i < ROWS; i++) {
     //     vector_arr_a[i] = pattern_a[i % 3];
     // }
-    // vector_a_address = init_vector(vector_arr_a, 256);
+    // vector_a_address = init_vector(vector_arr_a, ROWS);
 
     // uint16_t pattern_b[] = {
     //     0x3C00, // 1.0
     //     0x4000, // 2.0
     //     0x0000, // 0.0
     // };
-    // for (int i = 0; i < 256; i++) {
+    // for (int i = 0; i < ROWS; i++) {
     //     vector_arr_b[i] = pattern_b[i % 3];
     // }
-    // vector_b_address = init_vector(vector_arr_b, 256);
+    // vector_b_address = init_vector(vector_arr_b, ROWS);
 
     // Example for testing for different row-sizes and kernel_block sizes
     for (i = 0; i < ROWS; i++) {
@@ -131,7 +116,6 @@ void vadd_driver_code(void) {
     vector_a_address = init_vector(vector_arr_a, ROWS);
 
     for (i = 0; i < ROWS; i++) {
-        // Einfacher und schneller Tabellenzugriff
         vector_arr_b[i] = f16_integer_lookup_table[ROWS - i];
     }
     vector_b_address = init_vector(vector_arr_b, ROWS);
@@ -162,6 +146,9 @@ void vadd_driver_code(void) {
         pr_err("VAL: (hex): 0x%x\n", val);
         vector_result_address++;
     }
+
+    vfree(vector_arr_a);
+    vfree(vector_arr_b);
 }
 
 /**
@@ -169,42 +156,34 @@ void vadd_driver_code(void) {
  * Takes two input vectors from user space, executes the addition in memory, and
  * copies the result back to user space.
  */
-int vadd_from_userspace(__u64 result_addr, uint16_t *vector_arr_a,
-                        uint16_t *vector_arr_b, int len) {
+int vadd_from_userspace(uint16_t *vector_arr_a, uint16_t *vector_arr_b,
+                        struct pim_vectors *vectors_descriptor) {
 
-    const int ROWS = len;
+    const int ROWS = vectors_descriptor->len1;
     int kernel_blocks;
     uint16_t __iomem *vector_a_address;
     uint16_t __iomem *vector_b_address;
     uint16_t __iomem *vector_result_address;
     uint16_t __iomem *dummy_region_address;
-    uint16_t *kernel_result_buffer = NULL;
-    int i;
 
     kernel_builder_t builder;
 
-    switch (len) {
-    case 256:
+    if (ROWS == 256) {
         builder = build_kernel_vadd_X1;
-        break;
-    case 512:
+    } else if (ROWS == 512) {
         builder = build_kernel_vadd_X2;
-        break;
-    case 1024:
+    } else if (ROWS == 1024) {
         builder = build_kernel_vadd_X3;
-        break;
-    case 2048:
+    } else if (ROWS >= 2048) {
         builder = build_kernel_vadd_X4;
-        break;
-    default:
-        pr_err("vectors length must be either 256, 512, 1024 or 2048 for the "
-               "PIM-HW to efficiently process them. If the vectors are too "
-               "short, just fill them up with zeros.");
-        return -ENOMEM;
+    } else {
+        pr_err(
+            "Vector length must be at least 256. If the vectors are too short, "
+            "just fill them up with zeros.");
+        return -EINVAL;
     }
 
     kernel_blocks = set_kernel(builder);
-    // pr_err("kernel_blocks: %d\n", kernel_blocks);
 
     vector_a_address = init_vector(vector_arr_a, ROWS);
     if (!vector_a_address) {
@@ -243,30 +222,10 @@ int vadd_from_userspace(__u64 result_addr, uint16_t *vector_arr_a,
     vadd_execute(vector_a_address, vector_b_address, vector_result_address,
                  dummy_region_address, ROWS, kernel_blocks);
 
-
     set_bank_mode(SINGLE_BANK);
 
-    // Init a buffer for the result
-    kernel_result_buffer = kmalloc(ROWS * sizeof(uint16_t), GFP_KERNEL);
-    if (!kernel_result_buffer) {
-        pr_err("PIM: Failed to allocate kernel buffer for result\n");
-        return -ENOMEM;
-    }
+    vectors_descriptor->result_offset =
+        (uint64_t)vector_result_address - (uint64_t)pim_data_virt_addr;
 
-    // Fill the result buffer
-    for (i = 0; i < ROWS; i++) {
-        kernel_result_buffer[i] = ioread16(vector_result_address + i);
-    }
-
-    // Copy the result back to the userspace
-    if (copy_to_user((void __user *)result_addr, kernel_result_buffer,
-                     ROWS * sizeof(uint16_t))) {
-        pr_err("PIM: Failed to copy result vector to user space\n");
-        return -EFAULT;
-    } else {
-        pr_info("PIM: Successfully copied result to user space.\n");
-    }
-
-    kfree(kernel_result_buffer);
     return 0;
 }

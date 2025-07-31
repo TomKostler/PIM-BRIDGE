@@ -232,6 +232,7 @@ static void gemv_execute(uint16_t __iomem *matrix_base_addr,
     for (int i = 0; i < X16_COLUMNS; ++i) {
         trigger_read(input_vector_base_addr + i * INPUT_VECTOR_BLOCK_STRIDE);
     }
+    mb();
 
     // === 2. Execute Multiply and Accumulates ===
     for (int i = 0; i < X16_ROWS; ++i) {
@@ -243,15 +244,17 @@ static void gemv_execute(uint16_t __iomem *matrix_base_addr,
         }
     }
 
-    dsb(sy);
+    mb();
 
     // === 3. Execute FILLs for writing the output vector ===
     for (int i = 0; i < X16_COLUMNS; ++i) {
         trigger_write(output_vector_base_addr + i * BLOCK_IN_STRIPE_STRIDE);
     }
+    mb();
 
     // === 4. Trigger EXIT ===
     trigger_read(dummy_region_address);
+    mb();
 }
 
 /**
@@ -431,7 +434,7 @@ void gemv_driver_code(void) {
     uint16_t __iomem **input_vectors = NULL;
     int ret = 0;
 
-    int rows = 1024;
+    int rows = 64;
     int cols = 128;
 
     // Create the context struct
@@ -481,8 +484,6 @@ void gemv_driver_code(void) {
         ret = -ENOMEM;
         goto cleanup;
     }
-
-    // pr_err("NUM_CHUNKS: %d\n", num_chunks_data);
 
     ctx.result_integer_part = kmalloc(rows * sizeof(int32_t), GFP_KERNEL);
     ctx.result_fractional_part = kmalloc(rows * sizeof(int32_t), GFP_KERNEL);

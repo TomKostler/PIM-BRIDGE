@@ -11,6 +11,9 @@
 #include <linux/slab.h>
 #include <linux/uaccess.h>
 
+#include <linux/ktime.h>
+#include <linux/mm.h>
+
 #include "../include/bins.h"
 #include "../include/pim_data_allocator.h"
 #include "../include/pim_memory_region.h"
@@ -19,30 +22,13 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Tom Kostler");
 MODULE_DESCRIPTION("Kernel-Module acting as a driver for PIM-Functionality");
 
-struct pim_vectors {
-    __u64 vector_a_user_addr;
-    __u64 vector_b_user_addr;
-    __u64 result_vector_user_addr;
-    __u32 len1;
-    __u32 len2;
-};
-
-struct pim_gemv {
-    __u64 input_vector_user_addr;
-    __u64 matrix_user_addr;
-    __u64 result_vector_user_addr;
-    __u32 input_vector_len;
-    __u32 matrix_dim1;
-    __u32 matrix_dim2;
-};
-
 #define MAJOR_NUM 100
 #define DEVICE_NAME "pim_device"
 #define IOCTL_VADD _IOWR(MAJOR_NUM, 2, struct pim_vectors)
 #define IOCTL_VMUL _IOWR(MAJOR_NUM, 3, struct pim_vectors)
 #define IOCTL_GEMV _IOWR(MAJOR_NUM, 4, struct pim_gemv)
 
-#define MAX_ARRAY_ELEMENTS 4096
+#define MAX_VECTOR_ELEMENTS (1 << 21)
 
 volatile u32 __iomem *pim_data_virt_addr = NULL;
 volatile u8 __iomem *pim_config_virt_addr = NULL;
@@ -68,15 +54,10 @@ static int get_gemv_inputs(unsigned long arg, uint16_t **vector_out,
         pr_err("PIM: GEMV dimensions cannot be zero\n");
         return -EINVAL;
     }
-    if (descriptor.input_vector_len != descriptor.matrix_dim2) {
-        pr_err("PIM: Inner dimensions do not match for GEMV (vector_len != "
-               "matrix_cols)\n");
-        return -EINVAL;
-    }
 
     kernel_vector = vmalloc(descriptor.input_vector_len * sizeof(uint16_t));
-    kernel_matrix = vmalloc(descriptor.matrix_dim1 * descriptor.matrix_dim2 *
-                            sizeof(uint16_t));
+    kernel_matrix = vmalloc(descriptor.matrix_dim1 *
+                            descriptor.input_vector_len * sizeof(uint16_t));
 
     if (!kernel_vector || !kernel_matrix) {
         vfree(kernel_vector);
@@ -92,7 +73,7 @@ static int get_gemv_inputs(unsigned long arg, uint16_t **vector_out,
     }
     if (copy_from_user(kernel_matrix,
                        (void __user *)descriptor.matrix_user_addr,
-                       descriptor.matrix_dim1 * descriptor.matrix_dim2 *
+                       descriptor.matrix_dim1 * descriptor.input_vector_len *
                            sizeof(uint16_t))) {
         goto error_cleanup;
     }
@@ -132,6 +113,7 @@ static long pim_device_ioctl(struct file *file, unsigned int cmd,
     switch (cmd) {
     case IOCTL_VADD:
     case IOCTL_VMUL: {
+
         if (copy_from_user(&vectors_descriptor,
                            (struct pim_vectors __user *)arg,
                            sizeof(vectors_descriptor))) {
@@ -140,17 +122,15 @@ static long pim_device_ioctl(struct file *file, unsigned int cmd,
 
         if (vectors_descriptor.len1 == 0 ||
             vectors_descriptor.len1 != vectors_descriptor.len2 ||
-            vectors_descriptor.len1 > MAX_ARRAY_ELEMENTS) {
+            vectors_descriptor.len1 > MAX_VECTOR_ELEMENTS) {
             return -EINVAL;
         }
 
-        kernel_vector_a =
-            kmalloc(vectors_descriptor.len1 * sizeof(uint16_t), GFP_KERNEL);
-        kernel_vector_b =
-            kmalloc(vectors_descriptor.len1 * sizeof(uint16_t), GFP_KERNEL);
+        kernel_vector_a = vmalloc(vectors_descriptor.len1 * sizeof(uint16_t));
+        kernel_vector_b = vmalloc(vectors_descriptor.len1 * sizeof(uint16_t));
         if (!kernel_vector_a || !kernel_vector_b) {
-            kfree(kernel_vector_a);
-            kfree(kernel_vector_b);
+            vfree(kernel_vector_a);
+            vfree(kernel_vector_b);
             return -ENOMEM;
         }
 
@@ -160,27 +140,27 @@ static long pim_device_ioctl(struct file *file, unsigned int cmd,
             copy_from_user(kernel_vector_b,
                            (void __user *)vectors_descriptor.vector_b_user_addr,
                            vectors_descriptor.len1 * sizeof(uint16_t))) {
-            kfree(kernel_vector_a);
-            kfree(kernel_vector_b);
+            vfree(kernel_vector_a);
+            vfree(kernel_vector_b);
             return -EFAULT;
         }
 
         if (cmd == IOCTL_VADD) {
-            ret = vadd_from_userspace(
-                vectors_descriptor.result_vector_user_addr, kernel_vector_a,
-                kernel_vector_b, vectors_descriptor.len1);
+            ret = vadd_from_userspace(kernel_vector_a, kernel_vector_b,
+                                      &vectors_descriptor);
         } else {
-            ret = vmul_from_userspace(
-                vectors_descriptor.result_vector_user_addr, kernel_vector_a,
-                kernel_vector_b, vectors_descriptor.len1);
+            ret = vmul_from_userspace(kernel_vector_a, kernel_vector_b,
+                                      &vectors_descriptor);
         }
 
-        kfree(kernel_vector_a);
-        kfree(kernel_vector_b);
-
-        if (ret) {
-            return ret;
+        if (copy_to_user((struct pim_vectors __user *)arg, &vectors_descriptor,
+                         sizeof(vectors_descriptor))) {
+            pr_err("PIM: Failed to copy result offset back to user\n");
+            return -EFAULT;
         }
+
+        vfree(kernel_vector_a);
+        vfree(kernel_vector_b);
 
         break;
     }
@@ -190,6 +170,7 @@ static long pim_device_ioctl(struct file *file, unsigned int cmd,
                            sizeof(gemv_descriptor))) {
             return -EFAULT;
         }
+
         ret = get_gemv_inputs(arg, &kernel_input_vector, &len_input_vector,
                               &kernel_matrix, &matrix_dim1, &matrix_dim2);
         if (ret) {
@@ -216,10 +197,32 @@ static long pim_device_ioctl(struct file *file, unsigned int cmd,
     return 0;
 }
 
+static int pim_mmap(struct file *filp, struct vm_area_struct *vma) {
+    unsigned long size = vma->vm_end - vma->vm_start;
+    unsigned long pfn;
+
+    if (size > PIM_DATA_MEMORY_REGION_SIZE) {
+        pr_err("PIM: mmap requested size is too large.\n");
+        return -EINVAL;
+    }
+
+    pfn = PIM_DATA_MEMORY_REGION_BASE >> PAGE_SHIFT;
+
+    vma->vm_flags |= VM_IO | VM_DONTEXPAND | VM_DONTDUMP;
+
+    vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+
+    if (remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot)) {
+        pr_err("PIM: remap_pfn_range failed\n");
+        return -EAGAIN;
+    }
+
+    pr_info("PIM: Successfully remapped physical memory to userspace\n");
+    return 0;
+}
+
 static struct file_operations fops = {
-    .owner = THIS_MODULE,
-    .unlocked_ioctl = pim_device_ioctl,
-};
+    .owner = THIS_MODULE, .unlocked_ioctl = pim_device_ioctl, .mmap = pim_mmap};
 
 static int __init pim_bridge_init(void) {
     int major_number;

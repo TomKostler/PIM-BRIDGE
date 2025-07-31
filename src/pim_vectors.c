@@ -8,7 +8,6 @@
 int ROWS = 256;
 
 void __iomem *init_vector(uint16_t *arr, size_t length) {
-    uint16_t __iomem *current_addr;
     uint16_t __iomem *vector_start_addr;
     size_t total_size;
 
@@ -20,15 +19,7 @@ void __iomem *init_vector(uint16_t *arr, size_t length) {
         return NULL;
     }
 
-    current_addr = vector_start_addr;
-
-    for (int i = 0; i < length; i++) {
-        iowrite16(arr[i], current_addr);
-
-        current_addr++;
-        dsb(SY);
-    }
-
+    memcpy_toio(vector_start_addr, arr, total_size);
     return vector_start_addr;
 }
 
@@ -42,11 +33,7 @@ void __iomem *init_vector_result(size_t length) {
         return NULL;
     }
 
-    for (int i = 0; i < length; i++) {
-        iowrite16(0, vector_start_addr + i);
-        dsb(SY);
-    }
-
+    memset_io(vector_start_addr, 0, total_size);
     return vector_start_addr;
 }
 
