@@ -151,8 +151,6 @@ def exit_event_handler():
     for core in processor.get_cores():
         print("PROCESSOR TYPE 1:", core.get_type())
         
-
-    # This yield is only needed when run without a checkpoint
     # yield False
 
 
