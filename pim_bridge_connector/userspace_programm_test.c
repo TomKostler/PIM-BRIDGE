@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 #define COLOR_RESET "\x1b[0m"
@@ -22,9 +23,9 @@
 struct pim_vectors {
     uint64_t vector_a_user_addr;
     uint64_t vector_b_user_addr;
-    uint64_t result_vector_user_addr;
     uint32_t len1;
     uint32_t len2;
+    uint64_t result_offset;
 };
 
 struct pim_gemv {
@@ -135,13 +136,16 @@ void print_vector_operation(const char *title, const uint16_t *vec_a,
         COLOR_BLUE
         "-------+--------------+--------------+--------------\n" COLOR_RESET);
 
-    for (int i = 0; i < len; i++) {
+    uint32_t print_len = (len > 2048) ? 10 : len;
+    for (int i = 0; i < print_len; i++) {
         printf("%-6d | %-12.4f | %-12.4f | " COLOR_GREEN "%-12.4f" COLOR_RESET
                "\n",
                i, f16_to_float(vec_a[i]), f16_to_float(vec_b[i]),
                f16_to_float(vec_res[i]));
     }
-
+    if (len > 2048) {
+        printf(COLOR_BLUE "... [first 10 Elements printed]\n" COLOR_RESET);
+    }
     printf(COLOR_BLUE "========================================================"
                       "\n\n\n" COLOR_RESET);
 }
@@ -201,85 +205,6 @@ void print_gemv_operation(const char *title, const uint16_t *input_vec,
     printf("\n");
     printf(COLOR_BLUE "========================================================"
                       "\n\n\n" COLOR_RESET);
-}
-
-void test_vadd_negative(int fd, uint32_t len) {
-    uint16_t *a = malloc(len * sizeof(uint16_t));
-    uint16_t *b = malloc(len * sizeof(uint16_t));
-    uint16_t *res = malloc(len * sizeof(uint16_t));
-    if (!a || !b || !res) {
-        perror("Malloc for vadd failed");
-        free(a);
-        free(b);
-        free(res);
-        return;
-    }
-
-    for (uint32_t i = 0; i < len; i++) {
-        if (i % 3 == 0) {
-            a[i] = float_to_f16(0.0f);
-            b[i] = float_to_f16(-5.0f);
-        } else if (i % 3 == 1) {
-            a[i] = float_to_f16(-5.0f);
-            b[i] = float_to_f16(5.0f);
-        } else {
-            a[i] = float_to_f16(10.0f);
-            b[i] = float_to_f16(-5.0f);
-        }
-    }
-
-    struct pim_vectors desc;
-    desc.vector_a_user_addr = (uint64_t)a;
-    desc.vector_b_user_addr = (uint64_t)b;
-    desc.result_vector_user_addr = (uint64_t)res;
-    desc.len1 = len;
-    desc.len2 = len;
-
-    if (ioctl(fd, IOCTL_VADD, &desc) < 0) {
-        perror("ioctl(IOCTL_VADD) for negative test failed");
-    } else {
-        print_vector_operation("Vector-add ", a, b, res, len);
-    }
-
-    free(a);
-    free(b);
-    free(res);
-}
-
-void test_vmul_special_values(int fd, uint32_t len) {
-    printf(STYLE_BOLD "\n--- VMUL Testcase:  ---\n" COLOR_RESET);
-    uint16_t *a = malloc(len * sizeof(uint16_t));
-    uint16_t *b = malloc(len * sizeof(uint16_t));
-    uint16_t *res = malloc(len * sizeof(uint16_t));
-    if (!a || !b || !res) {
-        perror("malloc failed");
-        free(a);
-        free(b);
-        free(res);
-        return;
-    }
-
-    for (uint32_t i = 0; i < len; i++) {
-        a[i] = float_to_f16((i % 3 == 2) ? 5.0f : 12.5f);
-        b[i] = float_to_f16((float)(i % 3 - 1));
-    }
-
-    struct pim_vectors desc;
-    desc.vector_a_user_addr = (uint64_t)a;
-    desc.vector_b_user_addr = (uint64_t)b;
-    desc.result_vector_user_addr = (uint64_t)res;
-    desc.len1 = len;
-    desc.len2 = len;
-
-    if (ioctl(fd, IOCTL_VMUL, &desc) < 0) {
-        perror("ioctl(IOCTL_VMUL) failed");
-    } else {
-        print_vector_operation("Vector-mult ", a, b, res, len);
-    }
-
-    free(a);
-    free(b);
-    free(res);
 }
 
 void test_gemv_identity_matrix(int fd, uint32_t dim) {
@@ -543,18 +468,24 @@ void vadd_with_pim_evaluation(int fd, uint32_t vector_len) {
 
     uint16_t *vector_arr_a = NULL;
     uint16_t *vector_arr_b = NULL;
-    uint16_t *result_vector = NULL;
+
+    uint16_t *mapped_result_ptr = NULL;
+    size_t map_size = vector_len * sizeof(uint16_t) * 3;
 
     vector_arr_a = malloc(vector_len * sizeof(uint16_t));
     vector_arr_b = malloc(vector_len * sizeof(uint16_t));
-    result_vector = malloc(vector_len * sizeof(uint16_t));
 
-    if (!vector_arr_a || !vector_arr_b || !result_vector) {
-        perror("malloc for vectors failed");
-        free(vector_arr_a);
-        free(vector_arr_b);
-        free(result_vector);
-        return;
+    if (!vector_arr_a || !vector_arr_b) {
+        perror("malloc for input vectors failed");
+        goto cleanup_vadd;
+    }
+
+    mapped_result_ptr =
+        mmap(NULL, map_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
+    if (mapped_result_ptr == MAP_FAILED) {
+        perror("mmap failed");
+        goto cleanup_vadd;
     }
 
     // --- Prepare Vectors ---
@@ -572,7 +503,6 @@ void vadd_with_pim_evaluation(int fd, uint32_t vector_len) {
     printf("Calling IOCTL_VADD...\n");
     pim_vectors_desc.vector_a_user_addr = (uint64_t)vector_arr_a;
     pim_vectors_desc.vector_b_user_addr = (uint64_t)vector_arr_b;
-    pim_vectors_desc.result_vector_user_addr = (uint64_t)result_vector;
     pim_vectors_desc.len1 = vector_len;
     pim_vectors_desc.len2 = vector_len;
 
@@ -581,30 +511,47 @@ void vadd_with_pim_evaluation(int fd, uint32_t vector_len) {
         perror("ioctl(IOCTL_VADD) failed");
     } else {
         system("gem5-bridge --addr=0x10010000 dumpstats");
+
+        uint16_t *correct_result_ptr =
+            (uint16_t *)((char *)mapped_result_ptr +
+                         pim_vectors_desc.result_offset);
+
         print_vector_operation("Vector Addition (VADD)", vector_arr_a,
-                               vector_arr_b, result_vector, vector_len);
+                               vector_arr_b, correct_result_ptr, vector_len);
     }
+
+cleanup_vadd:
+    if (mapped_result_ptr != NULL && mapped_result_ptr != MAP_FAILED) {
+        munmap(mapped_result_ptr, map_size);
+    }
+    free(vector_arr_a);
+    free(vector_arr_b);
 }
 
 void vmul_with_pim_evaluation(int fd, uint32_t vector_len) {
     system("gem5-bridge --addr=0x10010000 resetstats");
-
     struct pim_vectors pim_vectors_desc;
 
     uint16_t *vector_arr_a = NULL;
     uint16_t *vector_arr_b = NULL;
-    uint16_t *result_vector = NULL;
+
+    uint16_t *mapped_result_ptr = NULL;
+    size_t map_size = vector_len * sizeof(uint16_t) * 3;
 
     vector_arr_a = malloc(vector_len * sizeof(uint16_t));
     vector_arr_b = malloc(vector_len * sizeof(uint16_t));
-    result_vector = malloc(vector_len * sizeof(uint16_t));
 
-    if (!vector_arr_a || !vector_arr_b || !result_vector) {
-        perror("malloc for vectors failed");
-        free(vector_arr_a);
-        free(vector_arr_b);
-        free(result_vector);
-        return;
+    if (!vector_arr_a || !vector_arr_b) {
+        perror("malloc for input vectors failed");
+        goto cleanup_vmul;
+    }
+
+    mapped_result_ptr =
+        mmap(NULL, map_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+
+    if (mapped_result_ptr == MAP_FAILED) {
+        perror("mmap failed");
+        goto cleanup_vmul;
     }
 
     // --- Prepare Vectors ---
@@ -622,7 +569,6 @@ void vmul_with_pim_evaluation(int fd, uint32_t vector_len) {
     printf("Calling IOCTL_VMUL...\n");
     pim_vectors_desc.vector_a_user_addr = (uint64_t)vector_arr_a;
     pim_vectors_desc.vector_b_user_addr = (uint64_t)vector_arr_b;
-    pim_vectors_desc.result_vector_user_addr = (uint64_t)result_vector;
     pim_vectors_desc.len1 = vector_len;
     pim_vectors_desc.len2 = vector_len;
 
@@ -631,9 +577,21 @@ void vmul_with_pim_evaluation(int fd, uint32_t vector_len) {
         perror("ioctl(IOCTL_VMUL) failed");
     } else {
         system("gem5-bridge --addr=0x10010000 dumpstats");
-        print_vector_operation("Vector Addition (VMUL)", vector_arr_a,
-                               vector_arr_b, result_vector, vector_len);
+
+        uint16_t *correct_result_ptr =
+            (uint16_t *)((char *)mapped_result_ptr +
+                         pim_vectors_desc.result_offset);
+
+        print_vector_operation("Vector Multiplication (VMUL)", vector_arr_a,
+                               vector_arr_b, correct_result_ptr, vector_len);
     }
+
+cleanup_vmul:
+    if (mapped_result_ptr != NULL && mapped_result_ptr != MAP_FAILED) {
+        munmap(mapped_result_ptr, map_size);
+    }
+    free(vector_arr_a);
+    free(vector_arr_b);
 }
 
 void gemv_with_pim_evaluation(int fd, int rows, int cols) {
@@ -671,7 +629,7 @@ void gemv_with_pim_evaluation(int fd, int rows, int cols) {
 
     pim_gemv_desc.input_vector_user_addr = (uint64_t)input_vector_data;
     pim_gemv_desc.matrix_user_addr = (uint64_t)matrix_data;
-    pim_gemv_desc.input_vector_len = cols;
+    pim_gemv_desc.input_vector_len = 128;
     pim_gemv_desc.result_vector_user_addr = (uint64_t)result_vector_gemv;
     pim_gemv_desc.matrix_dim1 = rows;
     pim_gemv_desc.matrix_dim2 = cols;
@@ -681,14 +639,15 @@ void gemv_with_pim_evaluation(int fd, int rows, int cols) {
         perror("ioctl(IOCTL_GEMV) failed");
     } else {
         system("gem5-bridge --addr=0x10010000 dumpstats");
-        print_gemv_operation("GEMV", input_vector_data, cols, matrix_data, rows,
-                             cols, result_vector_gemv, rows);
+        print_gemv_operation("GEMV", input_vector_data, 128, matrix_data, rows,
+                             128, result_vector_gemv, rows);
     }
 
     free(result_vector_gemv);
     free(input_vector_data);
     free(matrix_data);
 }
+
 int main() {
     int fd = -1;
 
@@ -699,38 +658,43 @@ int main() {
         goto cleanup;
     }
 
+    vadd_with_pim_evaluation(fd, 1 << 18);
+    vadd_with_pim_evaluation(fd, 1 << 19);
+    vadd_with_pim_evaluation(fd, 1 << 20);
+    vadd_with_pim_evaluation(fd, 1 << 21);
+
+    // vadd_userspace_evaluation(1 << 18);
+    // vadd_userspace_evaluation(1 << 19);
+    // vadd_userspace_evaluation(1 << 20);
+    // vadd_userspace_evaluation(1 << 21);
+
+    vmul_with_pim_evaluation(fd, 1 << 18);
+    vmul_with_pim_evaluation(fd, 1 << 19);
+    vmul_with_pim_evaluation(fd, 1 << 20);
+    vmul_with_pim_evaluation(fd, 1 << 21);
+
+    // vmul_userspace_evaluation(1 << 18);
+    // vmul_userspace_evaluation(1 << 19);
+    // vmul_userspace_evaluation(1 << 20);
+    // vmul_userspace_evaluation(1 << 21);
+
     gemv_with_pim_evaluation(fd, 1024, 4096);
     gemv_with_pim_evaluation(fd, 2048, 4096);
     gemv_with_pim_evaluation(fd, 4096, 8192);
     gemv_with_pim_evaluation(fd, 8192, 8192);
 
-    gemv_userspace_evaluation(1024, 4096);
-    gemv_userspace_evaluation(2048, 4096);
-    gemv_userspace_evaluation(4096, 8192);
-    gemv_userspace_evaluation(8192, 8192);
+    // gemv_userspace_evaluation(1024, 4096);
+    // gemv_userspace_evaluation(2048, 4096);
+    // gemv_userspace_evaluation(4096, 8192);
+    // gemv_userspace_evaluation(8192, 8192);
 
-    vadd_with_pim_evaluation(fd, 256);
-    vadd_with_pim_evaluation(fd, 512);
-    vadd_with_pim_evaluation(fd, 1024);
-    vadd_with_pim_evaluation(fd, 2048);
 
-    vadd_userspace_evaluation(256);
-    vadd_userspace_evaluation(512);
-    vadd_userspace_evaluation(1024);
-    vadd_userspace_evaluation(2048);
-
-    vmul_with_pim_evaluation(fd, 256);
-    vmul_with_pim_evaluation(fd, 512);
-    vmul_with_pim_evaluation(fd, 1024);
-    vmul_with_pim_evaluation(fd, 2048);
-
-    vmul_userspace_evaluation(256);
-    vmul_userspace_evaluation(512);
-    vmul_userspace_evaluation(1024);
-    vmul_userspace_evaluation(2048);
 
     // This can be used for normal operation, when no evaluation has to be made
-    // gemv_arbitrary_dims(fd, 1024, 4096);
+    // But be careful, the Evaluation Mode has to be unset in gemv.c in the
+    // module, otherwise GEMV not functioning correctly 
+
+    // gemv_arbitrary_dims(fd,1024, 4096);
     // test_vadd_negative(fd, vector_len);
     // test_vmul_special_values(fd, vector_len);
     // test_gemv_identity_matrix(fd, 128);
