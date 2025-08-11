@@ -20,7 +20,7 @@
 
 /**
  * Context structure to encapsulate result and state variables for an operation.
- * => Avoids global variablesa
+ * => Avoids global variables
  */
 struct gemv_context {
     // Result pointers

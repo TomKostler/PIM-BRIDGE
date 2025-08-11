@@ -39,19 +39,19 @@ static int vadd_execute(uint16_t __iomem *vector_a_address,
         for (int j = 0; j < kernel_blocks; j++) {
             trigger_read(vector_a_address + chunk_size_elements * i);
         }
-        mb();
+        rmb();
 
         // Triggers ADD in PIM-VM
         for (int j = 0; j < kernel_blocks; j++) {
             trigger_read(vector_b_address + chunk_size_elements * i);
         }
-        mb();
+        rmb();
 
         // Trigers FILL in PIM-VM
         for (int j = 0; j < kernel_blocks; j++) {
             trigger_write(vector_result_address + chunk_size_elements * i);
         }
-        mb();
+        wmb();
 
         // Dummy-Region Read => Triggers EXIT in PIM-VM
         trigger_read(dummy_region_address);
@@ -153,16 +153,14 @@ void vadd_driver_code(void) {
 
 /**
  * Performs a vector addition (VADD) operation using the PIM architecture.
- * Takes two input vectors from user space, executes the addition in memory, and
- * copies the result back to user space.
+ * Takes two input vectors from mapped user space, executes the addition in
+ * memory, and copies the result back to user space.
  */
-int vadd_from_userspace(uint16_t *vector_arr_a, uint16_t *vector_arr_b,
+int vadd_from_userspace(uint16_t *vector_a_address, uint16_t *vector_b_address,
                         struct pim_vectors *vectors_descriptor) {
 
-    const int ROWS = vectors_descriptor->len1;
+    const int ROWS = vectors_descriptor->len;
     int kernel_blocks;
-    uint16_t __iomem *vector_a_address;
-    uint16_t __iomem *vector_b_address;
     uint16_t __iomem *vector_result_address;
     uint16_t __iomem *dummy_region_address;
 
@@ -185,38 +183,19 @@ int vadd_from_userspace(uint16_t *vector_arr_a, uint16_t *vector_arr_b,
 
     kernel_blocks = set_kernel(builder);
 
-    vector_a_address = init_vector(vector_arr_a, ROWS);
-    if (!vector_a_address) {
-        pr_err("PIM: Failed to init vector a\n");
-        return -ENOMEM;
-    }
-
-    vector_b_address = init_vector(vector_arr_b, ROWS);
-    if (!vector_b_address) {
-        pr_err("PIM: Failed to init vector b\n");
-        return -ENOMEM;
-    }
-
-    // Init result vector
     vector_result_address = init_vector_result(ROWS);
     if (!vector_result_address) {
         pr_err("PIM: Failed to init result vector\n");
         return -ENOMEM;
     }
 
-    // Init dummy memory region for syncing operations that don't need data from
-    // memory
     dummy_region_address = init_dummy_memory_region();
     if (!dummy_region_address) {
         pr_err("PIM: Failed to init dummy region\n");
         return -ENOMEM;
     }
 
-    // Guarantee that vectors and PIM_DATA_REGION is correctly initialized
     dsb(SY);
-
-    // Switch to PIM_ALL_BANK to notifiy DRAM-Controller that reads/writes to
-    // PIM Regions should be forwarded to PIM-VM
     set_bank_mode(PIM_ALL_BANK);
 
     vadd_execute(vector_a_address, vector_b_address, vector_result_address,

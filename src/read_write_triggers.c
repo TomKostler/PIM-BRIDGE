@@ -3,13 +3,13 @@
 
 int trigger_write(void __iomem *address) {
     iowrite8(0, address);
-    wmb();
+    // wmb();
     return 0;
 }
 
 int trigger_read(void __iomem *address) {
     volatile uint8_t val = ioread8(address);
     (void)val;
-    rmb();
+    // rmb();
     return 0;
 }

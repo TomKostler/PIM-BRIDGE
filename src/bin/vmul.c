@@ -36,23 +36,23 @@ static int vmul_execute(uint16_t __iomem *vector_a_address,
         for (int j = 0; j < kernel_blocks; j++) {
             trigger_read(vector_a_address + chunk_size_elements * i);
         }
-        mb();
+        rmb();
 
         // Triggers ADD in PIM-VM
         for (int j = 0; j < kernel_blocks; j++) {
             trigger_read(vector_b_address + chunk_size_elements * i);
         }
-        mb();
+        rmb();
 
         // Trigers FILL in PIM-VM
         for (int j = 0; j < kernel_blocks; j++) {
             trigger_write(vector_result_address + chunk_size_elements * i);
         }
-        mb();
+        wmb();
 
         // Dummy-Region Read => Triggers EXIT in PIM-VM
         trigger_read(dummy_region_address);
-        mb();
+        rmb();
     }
     return 0;
 }
@@ -136,15 +136,13 @@ void vmul_driver_code(void) {
 
 /**
  * Executes a vector multiplication (VMUL) operation using input vectors from
- * user space. Initializes PIM memory regions, performs the VMUL operation, and
- * copies the result back to user space.
+ * mapped user space. Initializes PIM memory regions, performs the VMUL
+ * operation, and copies the result back to user space.
  */
-int vmul_from_userspace(uint16_t *vector_arr_a, uint16_t *vector_arr_b,
+int vmul_from_userspace(uint16_t *vector_a_address, uint16_t *vector_b_address,
                         struct pim_vectors *vectors_descriptor) {
-    const int ROWS = vectors_descriptor->len1;
+    const int ROWS = vectors_descriptor->len;
     int kernel_blocks;
-    uint16_t __iomem *vector_a_address;
-    uint16_t __iomem *vector_b_address;
     uint16_t __iomem *vector_result_address;
     uint16_t __iomem *dummy_region_address;
 
@@ -165,19 +163,6 @@ int vmul_from_userspace(uint16_t *vector_arr_a, uint16_t *vector_arr_b,
     }
 
     kernel_blocks = set_kernel(builder);
-    pr_info("kernel_blocks: %d\n", kernel_blocks);
-
-    vector_a_address = init_vector(vector_arr_a, ROWS);
-    if (!vector_a_address) {
-        pr_err("PIM: Failed to init vector a\n");
-        return -ENOMEM;
-    }
-
-    vector_b_address = init_vector(vector_arr_b, ROWS);
-    if (!vector_a_address) {
-        pr_err("PIM: Failed to init vector b\n");
-        return -ENOMEM;
-    }
 
     // Init result vector
     vector_result_address = init_vector_result(ROWS);

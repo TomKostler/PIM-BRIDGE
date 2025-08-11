@@ -106,6 +106,8 @@ static long pim_device_ioctl(struct file *file, unsigned int cmd,
     struct pim_vectors vectors_descriptor;
     struct pim_gemv gemv_descriptor;
 
+    size_t vector_size_bytes;
+
     int ret;
 
     current_start_free_mem_offset = 0;
@@ -120,30 +122,16 @@ static long pim_device_ioctl(struct file *file, unsigned int cmd,
             return -EFAULT;
         }
 
-        if (vectors_descriptor.len1 == 0 ||
-            vectors_descriptor.len1 != vectors_descriptor.len2 ||
-            vectors_descriptor.len1 > MAX_VECTOR_ELEMENTS) {
+        vector_size_bytes = vectors_descriptor.len * sizeof(uint16_t);
+        if (vectors_descriptor.len == 0 ||
+            vectors_descriptor.len > MAX_VECTOR_ELEMENTS) {
             return -EINVAL;
         }
 
-        kernel_vector_a = vmalloc(vectors_descriptor.len1 * sizeof(uint16_t));
-        kernel_vector_b = vmalloc(vectors_descriptor.len1 * sizeof(uint16_t));
-        if (!kernel_vector_a || !kernel_vector_b) {
-            vfree(kernel_vector_a);
-            vfree(kernel_vector_b);
-            return -ENOMEM;
-        }
-
-        if (copy_from_user(kernel_vector_a,
-                           (void __user *)vectors_descriptor.vector_a_user_addr,
-                           vectors_descriptor.len1 * sizeof(uint16_t)) ||
-            copy_from_user(kernel_vector_b,
-                           (void __user *)vectors_descriptor.vector_b_user_addr,
-                           vectors_descriptor.len1 * sizeof(uint16_t))) {
-            vfree(kernel_vector_a);
-            vfree(kernel_vector_b);
-            return -EFAULT;
-        }
+        kernel_vector_a = (uint16_t *)((char *)pim_data_virt_addr +
+                                       vectors_descriptor.offset_a);
+        kernel_vector_b = (uint16_t *)((char *)pim_data_virt_addr +
+                                       vectors_descriptor.offset_b);
 
         if (cmd == IOCTL_VADD) {
             ret = vadd_from_userspace(kernel_vector_a, kernel_vector_b,
@@ -152,15 +140,6 @@ static long pim_device_ioctl(struct file *file, unsigned int cmd,
             ret = vmul_from_userspace(kernel_vector_a, kernel_vector_b,
                                       &vectors_descriptor);
         }
-
-        if (copy_to_user((struct pim_vectors __user *)arg, &vectors_descriptor,
-                         sizeof(vectors_descriptor))) {
-            pr_err("PIM: Failed to copy result offset back to user\n");
-            return -EFAULT;
-        }
-
-        vfree(kernel_vector_a);
-        vfree(kernel_vector_b);
 
         break;
     }
@@ -257,7 +236,7 @@ static int __init pim_bridge_init(void) {
     pr_info("Initialized PIM-Region starting at: %px\n", pim_data_virt_addr);
 
     // This code triggers the PIM-VM without needing a call from the User
-    // Library
+    // Library (only works for the CPU Model O3 in gem5-Simulation)
     // current_start_free_mem_offset = 0;
     // vadd_driver_code();
     // current_start_free_mem_offset = 0;
