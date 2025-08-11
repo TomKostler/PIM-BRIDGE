@@ -21,11 +21,10 @@
 #define STYLE_BOLD "\x1b[1m"
 
 struct pim_vectors {
-    uint64_t vector_a_user_addr;
-    uint64_t vector_b_user_addr;
-    uint32_t len1;
-    uint32_t len2;
+    uint64_t offset_a;
+    uint64_t offset_b;
     uint64_t result_offset;
+    uint32_t len;
 };
 
 struct pim_gemv {
@@ -463,135 +462,116 @@ void gemv_userspace_evaluation(int rows, int cols) {
 }
 
 void vadd_with_pim_evaluation(int fd, uint32_t vector_len) {
-    system("gem5-bridge --addr=0x10010000 resetstats");
     struct pim_vectors pim_vectors_desc;
 
-    uint16_t *vector_arr_a = NULL;
-    uint16_t *vector_arr_b = NULL;
+    size_t vector_size_bytes = vector_len * sizeof(uint16_t);
+    size_t map_size = vector_size_bytes * 3;
 
-    uint16_t *mapped_result_ptr = NULL;
-    size_t map_size = vector_len * sizeof(uint16_t) * 3;
+    uint16_t *local_a = malloc(vector_size_bytes);
+    uint16_t *local_b = malloc(vector_size_bytes);
 
-    vector_arr_a = malloc(vector_len * sizeof(uint16_t));
-    vector_arr_b = malloc(vector_len * sizeof(uint16_t));
-
-    if (!vector_arr_a || !vector_arr_b) {
-        perror("malloc for input vectors failed");
-        goto cleanup_vadd;
-    }
-
-    mapped_result_ptr =
-        mmap(NULL, map_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-
-    if (mapped_result_ptr == MAP_FAILED) {
-        perror("mmap failed");
-        goto cleanup_vadd;
-    }
-
-    // --- Prepare Vectors ---
+    // Prepare fast all-in one memcpy through this indirection
     uint16_t pattern_a[] = {float_to_f16(0), float_to_f16(1), float_to_f16(2)};
     for (int i = 0; i < vector_len; i++) {
-        vector_arr_a[i] = pattern_a[i % 3];
+        local_a[i] = pattern_a[i % 3];
     }
 
     uint16_t pattern_b[] = {float_to_f16(1), float_to_f16(2), float_to_f16(0)};
     for (int i = 0; i < vector_len; i++) {
-        vector_arr_b[i] = pattern_b[i % 3];
+        local_b[i] = pattern_b[i % 3];
     }
 
-    // --- IOCTL-CALLS ---
-    printf("Calling IOCTL_VADD...\n");
-    pim_vectors_desc.vector_a_user_addr = (uint64_t)vector_arr_a;
-    pim_vectors_desc.vector_b_user_addr = (uint64_t)vector_arr_b;
-    pim_vectors_desc.len1 = vector_len;
-    pim_vectors_desc.len2 = vector_len;
+    uint16_t *vector_arr_a =
+        mmap(NULL, map_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
-    printf("Calling VADD for Evaluation, vector length: %d\n", vector_len);
+    uint16_t *vector_arr_b =
+        (uint16_t *)((char *)vector_arr_a + vector_size_bytes);
+    uint16_t *result_ptr =
+        (uint16_t *)((char *)vector_arr_a + 2 * vector_size_bytes);
+
+    system("gem5-bridge --addr=0x10010000 resetstats");
+
+    // Faster than naive copying with the for loop directly to the mapped region
+    memcpy(vector_arr_a, local_a, vector_size_bytes);
+    memcpy(vector_arr_b, local_b, vector_size_bytes);
+
+    printf("Calling IOCTL_VADD...\n");
+    pim_vectors_desc.offset_a = 0;
+    pim_vectors_desc.offset_b = vector_size_bytes;
+    pim_vectors_desc.result_offset = 2 * vector_size_bytes;
+    pim_vectors_desc.len = vector_len;
+
+    printf("Calling VADD for Evaluation (Zero-Copy), vector length: %d\n",
+           vector_len);
     if (ioctl(fd, IOCTL_VADD, &pim_vectors_desc) < 0) {
         perror("ioctl(IOCTL_VADD) failed");
     } else {
         system("gem5-bridge --addr=0x10010000 dumpstats");
 
-        uint16_t *correct_result_ptr =
-            (uint16_t *)((char *)mapped_result_ptr +
-                         pim_vectors_desc.result_offset);
-
         print_vector_operation("Vector Addition (VADD)", vector_arr_a,
-                               vector_arr_b, correct_result_ptr, vector_len);
+                               vector_arr_b, result_ptr, vector_len);
     }
 
-cleanup_vadd:
-    if (mapped_result_ptr != NULL && mapped_result_ptr != MAP_FAILED) {
-        munmap(mapped_result_ptr, map_size);
-    }
-    free(vector_arr_a);
-    free(vector_arr_b);
+    // --- Cleanup ---
+    munmap(vector_arr_a, map_size);
+    free(local_a);
+    free(local_b);
 }
 
 void vmul_with_pim_evaluation(int fd, uint32_t vector_len) {
-    system("gem5-bridge --addr=0x10010000 resetstats");
     struct pim_vectors pim_vectors_desc;
 
-    uint16_t *vector_arr_a = NULL;
-    uint16_t *vector_arr_b = NULL;
+    size_t vector_size_bytes = vector_len * sizeof(uint16_t);
+    size_t map_size = vector_size_bytes * 3;
 
-    uint16_t *mapped_result_ptr = NULL;
-    size_t map_size = vector_len * sizeof(uint16_t) * 3;
+    uint16_t *local_a = malloc(vector_size_bytes);
+    uint16_t *local_b = malloc(vector_size_bytes);
 
-    vector_arr_a = malloc(vector_len * sizeof(uint16_t));
-    vector_arr_b = malloc(vector_len * sizeof(uint16_t));
-
-    if (!vector_arr_a || !vector_arr_b) {
-        perror("malloc for input vectors failed");
-        goto cleanup_vmul;
-    }
-
-    mapped_result_ptr =
-        mmap(NULL, map_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-
-    if (mapped_result_ptr == MAP_FAILED) {
-        perror("mmap failed");
-        goto cleanup_vmul;
-    }
-
-    // --- Prepare Vectors ---
+    // Prepare fast all-in one memcpy through this indirection
     uint16_t pattern_a[] = {float_to_f16(0), float_to_f16(1), float_to_f16(2)};
     for (int i = 0; i < vector_len; i++) {
-        vector_arr_a[i] = pattern_a[i % 3];
+        local_a[i] = pattern_a[i % 3];
     }
 
     uint16_t pattern_b[] = {float_to_f16(1), float_to_f16(2), float_to_f16(0)};
     for (int i = 0; i < vector_len; i++) {
-        vector_arr_b[i] = pattern_b[i % 3];
+        local_b[i] = pattern_b[i % 3];
     }
 
-    // --- IOCTL-CALLS ---
-    printf("Calling IOCTL_VMUL...\n");
-    pim_vectors_desc.vector_a_user_addr = (uint64_t)vector_arr_a;
-    pim_vectors_desc.vector_b_user_addr = (uint64_t)vector_arr_b;
-    pim_vectors_desc.len1 = vector_len;
-    pim_vectors_desc.len2 = vector_len;
+    uint16_t *vector_arr_a =
+        mmap(NULL, map_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
-    printf("Calling VMUL for Evaluation, vector length: %d\n", vector_len);
+    uint16_t *vector_arr_b =
+        (uint16_t *)((char *)vector_arr_a + vector_size_bytes);
+    uint16_t *result_ptr =
+        (uint16_t *)((char *)vector_arr_a + 2 * vector_size_bytes);
+
+    system("gem5-bridge --addr=0x10010000 resetstats");
+
+    // Faster than naive copying with the for loop directly to the mapped region
+    memcpy(vector_arr_a, local_a, vector_size_bytes);
+    memcpy(vector_arr_b, local_b, vector_size_bytes);
+
+    printf("Calling IOCTL_VMUL...\n");
+    pim_vectors_desc.offset_a = 0;
+    pim_vectors_desc.offset_b = vector_size_bytes;
+    pim_vectors_desc.result_offset = 2 * vector_size_bytes;
+    pim_vectors_desc.len = vector_len;
+
+    printf("Calling VMUL for Evaluation (Zero-Copy), vector length: %d\n",
+           vector_len);
     if (ioctl(fd, IOCTL_VMUL, &pim_vectors_desc) < 0) {
         perror("ioctl(IOCTL_VMUL) failed");
     } else {
         system("gem5-bridge --addr=0x10010000 dumpstats");
-
-        uint16_t *correct_result_ptr =
-            (uint16_t *)((char *)mapped_result_ptr +
-                         pim_vectors_desc.result_offset);
-
         print_vector_operation("Vector Multiplication (VMUL)", vector_arr_a,
-                               vector_arr_b, correct_result_ptr, vector_len);
+                               vector_arr_b, result_ptr, vector_len);
     }
 
-cleanup_vmul:
-    if (mapped_result_ptr != NULL && mapped_result_ptr != MAP_FAILED) {
-        munmap(mapped_result_ptr, map_size);
-    }
-    free(vector_arr_a);
-    free(vector_arr_b);
+    // --- Cleanup ---
+    munmap(vector_arr_a, map_size);
+    free(local_a);
+    free(local_b);
 }
 
 void gemv_with_pim_evaluation(int fd, int rows, int cols) {
@@ -688,11 +668,9 @@ int main() {
     // gemv_userspace_evaluation(4096, 8192);
     // gemv_userspace_evaluation(8192, 8192);
 
-
-
     // This can be used for normal operation, when no evaluation has to be made
     // But be careful, the Evaluation Mode has to be unset in gemv.c in the
-    // module, otherwise GEMV not functioning correctly 
+    // module, otherwise GEMV not functioning correctly
 
     // gemv_arbitrary_dims(fd,1024, 4096);
     // test_vadd_negative(fd, vector_len);
